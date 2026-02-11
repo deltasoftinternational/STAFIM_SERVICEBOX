@@ -1,0 +1,5 @@
+.vscode/.alcache/*.*
+.alpackages/*.app
+*.app
+.alpackages/*.app
+.altestrunner/config.json

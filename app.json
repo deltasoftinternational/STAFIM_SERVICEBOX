@@ -1,0 +1,57 @@
+{
+  "id": "34e9104a-2ced-4aed-bd08-796683b1a240",
+  "name": "STAFIM-SBOX",
+  "publisher": "Default Publisher",
+  "version": "1.0.0.0",
+  "brief": "",
+  "description": "",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+   {
+      "id": "d5848a24-3146-46bc-ba00-4f4c47ab38bb",
+      "publisher": "Deltasoft International",
+      "name": "STAFIM",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "6c53635c-da7a-4f40-9e39-835a48789f98",
+      "publisher": "ELVA",
+      "name": "ELVA DMS BC26",
+      "version": "1.0.0.0"
+    },
+     {
+      "id": "0bfb933e-6382-4eca-9db5-bdda953de82b",
+      "publisher": "Deltasoft International",
+      "name": "ELVA STD BC26",
+      "version": "1.0.0.0"
+    },
+     {
+      "id": "840d69c1-a2ae-4b41-bfb1-4b23af2cf237",
+      "publisher": "DeltaSoft International",
+      "name": "StandardTunisien",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "platform": "1.0.0.0",
+  "application": "26.0.0.0",
+  "idRanges": [
+    {
+      "from": 50100,
+      "to": 50149
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "15.0",
+  "features": [
+    "NoImplicitWith"
+  ]
+}

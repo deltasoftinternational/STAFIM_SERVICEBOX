@@ -1,0 +1,44 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "BC40",
+            "request": "launch",
+            "type": "al",
+            "environmentType": "OnPrem",
+            "server": "http://localhost:8080/BC240/",
+            "serverInstance": "BC240",
+            "authentication": "Windows",
+            // "username": "ROUKAYA",
+            //"password": "Delt@S0ft", 
+            "breakOnError": "All",
+            "launchBrowser": true,
+            //"enableLongRunningSqlStatements": true,
+            //"enableSqlInformationDebugger": true,
+            "usePublicURLFromServer": true,
+            "port": 2349,
+            "schemaUpdateMode": "ForceSync"
+        },
+         {
+            "name": "STAFIM DEVNUP",
+            "request": "launch",
+            "type": "al",
+            "environmentType": "OnPrem",
+            "server": "http://10.132.15.170:8181/DEVNUP/",
+            "serverInstance": "DEVNUP",
+            "authentication": "UserPassword",
+            "username": "DELTASOFT1",
+            "password": "DELTA@$2025soft",
+            "startupObjectId": 22,
+            "startupObjectType": "Page",
+            "breakOnError": "All",
+            "launchBrowser": true,
+            "enableLongRunningSqlStatements": true,
+            "enableSqlInformationDebugger": true,
+            "tenant": "default",
+            "schemaUpdateMode": "ForceSync",
+            "port": 6349
+        }
+
+    ]
+}
