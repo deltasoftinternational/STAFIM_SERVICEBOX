@@ -811,7 +811,7 @@ codeunit 75101 "Business Layer"
             XMLDossier.SetAttribute('Code', '0');
             XMLDossier.SetAttribute('DOSSIER_DMS_ID', RecSalesInvoiceHeader."No.");
             XMLDossier.SetAttribute('TexteDMS', '');
-            XMLDossier.SetAttribute('ETATDOSSIERDMS', '2'); // Facturé
+            XMLDossier.SetAttribute('ETATDOSSIERDMS', '1'); // Facturé
                                                             // Attributs vides requis par le schéma PSA
             XMLDossier.SetAttribute('RDV_DMS_ID', '');
             XMLDossier.SetAttribute('ANNEERDV', '');
@@ -1061,122 +1061,79 @@ codeunit 75101 "Business Layer"
         exit(CopyStr(XmlText, StartPos, EndPos - 1));
     end;
 
-
-    procedure LZRF46T23V1(var TempRoot: XmlElement; CurrentDMS: XmlElement; RqType: Text)
+    procedure LZRF46T23V1(
+     var TempRoot: XmlElement;
+     CurrentDMS: XmlElement;
+     CodeImputationDMS_PR: Code[20])
     var
         RecItem: Record Item;
         RecCustomer: Record Customer;
-        SBManagement: Codeunit "STF Service Box Mgt";
-        TempSalesLine: Record "Sales Line" temporary;
-
         XmlNodesPR: XmlNodeList;
         XmlNodePR: XmlNode;
-
         XMLRoot: XmlElement;
-        NodePR: XmlElement;
-
         ReferencePR: Code[30];
-        CodeImputationDMS_PR: Code[30];
         LigneDTId: Text[30];
-
-        Remise: Decimal;
-        PrixUnitaireHT: Decimal;
-        PrixUnitaireTTC: Decimal;
-        ErrorTxt: Text;
+        CodePR: Code[10];
         i: Integer;
+        ProcessedRefs: Dictionary of [Text, Boolean]; // ajouter cette variable
+
     begin
-
-        Remise := 0;
-        PrixUnitaireHT := 0;
-        PrixUnitaireTTC := 0;
-
-        // récupérer les PR
         if not CurrentDMS.SelectNodes('PR', XmlNodesPR) then
             exit;
+        if XmlNodesPR.Count = 0 then
+            exit;
 
-        // créer racine LZRF46
+        // ── Créer LZRF46 temporairement ─────────────────────────────
         XMLRoot := XmlElement.Create('LZRF46');
-        TempRoot.Add(XMLRoot);
-
         XMLRoot.SetAttribute('Code', '0');
-        XMLRoot.SetAttribute('TexteDMS', '');
-
-        CodeImputationDMS_PR := GetAttributeValue(CurrentDMS, 'CLIENT_DMS_ID');
 
         for i := 1 to XmlNodesPR.Count do begin
-
             XmlNodesPR.Get(i, XmlNodePR);
-
-            ReferencePR := GetAttributeValue(XmlNodePR.AsXmlElement(), 'REFERENCE_PR');
+            ReferencePR := GetAttributeValue(XmlNodePR.AsXmlElement(), 'ReferencePR');
             LigneDTId := GetAttributeValue(XmlNodePR.AsXmlElement(), 'LIGNE_DT_ID');
+            CodePR := GetAttributeValue(XmlNodePR.AsXmlElement(), 'CODE_PR');
 
-            RecItem.Reset();
-            RecItem.SetRange("No.", ReferencePR);
-            RecItem.SetRange(Blocked, false);
+            if ReferencePR = '' then
+                continue;
 
-            if RecItem.FindFirst() then begin
+            // ✅ Dédupliquer : une seule ligne prix par ReferencePR
+            if ProcessedRefs.ContainsKey(ReferencePR) then
+                continue;
+            ProcessedRefs.Add(ReferencePR, true);
 
-                if (CodeImputationDMS_PR <> '') and RecCustomer.Get(CodeImputationDMS_PR) then begin
+            if (CodePR = '0') or (CodePR = '2') then
+                AddPRPrix(XMLRoot, ReferencePR, LigneDTId,
+                          CodeImputationDMS_PR, RecItem, RecCustomer);
+        end;  // ── N'ajouter LZRF46 que s'il contient au moins un PR prix ──
+        if XMLRoot.GetChildNodes().Count > 0 then
+            TempRoot.Add(XMLRoot);
+        // ✅ sinon LZRF46 est abandonné silencieusement
+    end;
 
-                    SBManagement.FindPriceDiscountItem(
-                        RecItem."No.",
-                        RecCustomer."No.",
-                        ErrorTxt,
-                        TempSalesLine);
+    local procedure AddPRPrixVide(
+        var XMLRoot: XmlElement;
+        ReferencePR: Code[30])
+    var
+        XMLNode: XmlElement;
+    begin
+        AddElement(XMLRoot, 'PR', XMLNode);
+        XMLNode.SetAttribute('CODE_PR', '99');
+        XMLNode.SetAttribute('ReferencePR', SetItemNo(ReferencePR));
 
-                    if TempSalesLine.Count() > 0 then begin
-                        Remise := TempSalesLine."Line Discount %";
-                        PrixUnitaireHT := TempSalesLine."Unit Price";
-                        PrixUnitaireTTC := PrixUnitaireHT * 1.19;
-                    end else begin
-                        PrixUnitaireHT := RecItem."Unit Price";
-                        PrixUnitaireTTC := RecItem."Unit Price" * 1.19;
-                    end;
-
-                end else begin
-                    PrixUnitaireHT := RecItem."Unit Price";
-                    PrixUnitaireTTC := RecItem."Unit Price" * 1.19;
-                end;
-
-                NodePR := XmlElement.Create('PR');
-
-                NodePR.SetAttribute('LIGNE_DT_ID', LigneDTId);
-                NodePR.SetAttribute('ReferencePR', ReferencePR);
-                NodePR.SetAttribute('LibellePR', RecItem.Description);
-                NodePR.SetAttribute('PrixUnitaireHT', Format(PrixUnitaireHT));
-                NodePR.SetAttribute('PrixUnitaireTTC', Format(PrixUnitaireTTC));
-                NodePR.SetAttribute('PrixUV_HT', '');
-                NodePR.SetAttribute('PrixUV_TTC', '');
-                NodePR.SetAttribute('REMISE_DMS', Format(Remise));
-
-                XMLRoot.Add(NodePR);
-
-            end else begin
-
-                NodePR := XmlElement.Create('PR');
-
-                NodePR.SetAttribute('CODE_PR', '99');
-                NodePR.SetAttribute('ReferencePR', ReferencePR);
-                NodePR.SetAttribute('LibellePR', '');
-                NodePR.SetAttribute('PrixUnitaireHT', '');
-                NodePR.SetAttribute('PrixUnitaireTTC', '');
-                NodePR.SetAttribute('Remise', '');
-
-                XMLRoot.Add(NodePR);
-
-            end;
-
-        end;
-
+        XMLNode.SetAttribute('LibellePR', '');
+        XMLNode.SetAttribute('PrixUnitaireHT', '');
+        XMLNode.SetAttribute('PrixUnitaireTTC', '');
+        XMLNode.SetAttribute('Remise', '');
     end;
 
     procedure LZRF45T22V1(var TempRoot: XmlElement; CurrentDMS: XmlElement; RqType: Text)
     var
-        XmlNodeLDT: XmlNodeList;
-        XmlNodesMO: XmlNodeList;
-        XmlNodeMO: XmlNode;
         SBManagement: Codeunit "STF Service Box Mgt";
 
+        XmlNodeLDT: XmlNodeList;
+        XmlNodesMO: XmlNodeList;
+        XmlNodeLDTItem: XmlNode;
+        XmlNodeMO: XmlNode;
         XMLRoot: XmlElement;
         NodeMO: XmlElement;
 
@@ -1185,140 +1142,86 @@ codeunit 75101 "Business Layer"
         LIGNE_DT_ID: Text[30];
         TEMPSGLOBAL: Decimal;
 
-        PrixUnitHT: Decimal;
-        PrixUnitTTC: Decimal;
+        UnitPrice: Decimal;
+        UnitPriceTTC: Decimal;
         ErrorMsg: Text;
-
+        ErrorMO: Boolean;
         i, j : Integer;
     begin
-        // Récupérer les LDT
+        // Initialisation
+        ErrorMO := false;
+
         if not CurrentDMS.SelectNodes('LDT', XmlNodeLDT) then
             exit;
 
-        if XmlNodeLDT.Count = 0 then
-            exit;
-
-        // Créer la racine LZRF45
+        // Création du noeud racine LZRF45
         XMLRoot := XmlElement.Create('LZRF45');
         TempRoot.Add(XMLRoot);
 
-        XMLRoot.SetAttribute('Code', '0');
-        XMLRoot.SetAttribute('TexteDMS', '');
-
-        // Parcourir toutes les LDT
         for j := 1 to XmlNodeLDT.Count do begin
-            XmlNodeLDT.Get(j, XmlNodeMO);
+            XmlNodeLDT.Get(j, XmlNodeLDTItem);
 
-            // Récupérer toutes les MO de cette LDT
-            if not XmlNodeMO.SelectNodes('MO', XmlNodesMO) then
+            if not XmlNodeLDTItem.SelectNodes('MO', XmlNodesMO) then
                 continue;
 
             for i := 1 to XmlNodesMO.Count do begin
                 XmlNodesMO.Get(i, XmlNodeMO);
 
-                // Récupérer les attributs
+                // Extraction des données du XML source
                 CODEOPERATION := GetAttributeValue(XmlNodeMO.AsXmlElement(), 'CODEOPERATION');
                 CODEIMPUTATIONDMS_MO := GetAttributeValue(XmlNodeMO.AsXmlElement(), 'CODEIMPUTATIONDMS_MO');
                 LIGNE_DT_ID := GetAttributeValue(XmlNodeMO.AsXmlElement(), 'LIGNE_DT_ID');
 
-                // Récupérer TEMPSGLOBAL
-                TEMPSGLOBAL := 0;
-                EVALUATE(TEMPSGLOBAL, CONVERTSTR(GetAttributeValue(XmlNodeMO.AsXmlElement(), 'TEMPSGLOBAL'), '.', ','));
+                if not Evaluate(TEMPSGLOBAL, ConvertStr(GetAttributeValue(XmlNodeMO.AsXmlElement(), 'TEMPSGLOBAL'), '.', ',')) then
+                    TEMPSGLOBAL := 0;
 
-                // Vérifier le client
-                //CheckCustomerByTypeImputation(GetAttributeValue(XmlNodeMO.AsXmlElement(), TypeXX + '_MO'), CODEIMPUTATIONDMS_MO);
-
-                // Créer le noeud MO
+                // Création du noeud MO de sortie
                 NodeMO := XmlElement.Create('MO');
                 XMLRoot.Add(NodeMO);
-
                 NodeMO.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+                NodeMO.SetAttribute('LIGNE_DT_ID_DMS', '');
                 NodeMO.SetAttribute('WR_CODE_OPERATION', CODEOPERATION);
 
-                // Calculer les prix via FindPriceMO
-                if SBManagement.FindPriceMO(CODEIMPUTATIONDMS_MO, CODEOPERATION, PrixUnitHT, PrixUnitTTC, ErrorMsg) then begin
-                    NodeMO.SetAttribute('PrixUnitaireHT', Format(PrixUnitHT * TEMPSGLOBAL, 0, '<Precision,2:2><Standard Format,2>'));
-                    NodeMO.SetAttribute('PrixUnitaireTTC', Format(PrixUnitTTC * TEMPSGLOBAL, 0, '<Precision,2:2><Standard Format,2>'));
-                    NodeMO.SetAttribute('REMISE_DMS', '0'); // À adapter si remise spécifique
+                // Appel de votre fonction de recherche de prix
+                if FindPriceMO(CODEIMPUTATIONDMS_MO, CODEOPERATION, UnitPrice, UnitPriceTTC, ErrorMsg) then begin
+                    // Succès : On multiplie le prix unitaire par le temps
+                    NodeMO.SetAttribute('PrixUnitaireHT', Format(UnitPrice, 0, '<Precision,2:2><Standard Format,2>'));
+                    NodeMO.SetAttribute('PrixUnitaireTTC', Format(UnitPriceTTC, 0, '<Precision,2:2><Standard Format,2>'));
+                    NodeMO.SetAttribute('REMISE_DMS', '0.00'); // À gérer dans FindPriceMO si nécessaire
                     NodeMO.SetAttribute('TexteErreur', '');
                 end else begin
-                    NodeMO.SetAttribute('PrixUnitaireHT', '');
-                    NodeMO.SetAttribute('PrixUnitaireTTC', '');
-                    NodeMO.SetAttribute('REMISE_DMS', '');
-                    NodeMO.SetAttribute('TexteErreur', ErrorMsg);
+                    // Échec : Récupération des valeurs originales du XML (Fallback)
+                    NodeMO.SetAttribute('PrixUnitaireHT', GetAttributeValue(XmlNodeMO.AsXmlElement(), 'PRIXHT_MO'));
+                    NodeMO.SetAttribute('PrixUnitaireTTC', GetAttributeValue(XmlNodeMO.AsXmlElement(), 'PRIXTTC_MO'));
+                    NodeMO.SetAttribute('REMISE_DMS', '0.00');
+                    NodeMO.SetAttribute('TexteErreur', CODEOPERATION + ' ' + ErrorMsg);
+                    ErrorMO := true;
                 end;
             end;
         end;
-    end;
 
-    procedure LZRF08T11(var XMLDom: XmlDocument; XMLNodeReq: XmlNode)
-    var
-        XmlNodesPR: XmlNodeList;
-        XMLDms: XmlNode;
-        XMLRoot: XmlElement;
-        XMLNodeItem: XmlNode;
-        ORIGINEVENTE_Attribute: XmlAttribute;
-        DOSSIER_DMS_ID_Attribute: XmlAttribute;
-
-        CODEIMPUTATIONDMS_PR: Text[30];
-        LIGNE_DT_ID: Text[30];
-        TYPEFACTURATION_PR: Code[2];
-        i: Integer;
-
-        // Records
-        RecSalesLine: Record "Sales Line";
-        RecServiceLine: Record "Service Line EDMS"; // Note: Vérifiez l'ID si c'est une table personnalisée
-
-        // Variables de helper (assumées existantes ou à créer)
-        XmlDocOut: XmlDocument;
-    begin
-        // --- Initialisation ---
-        // En AL, selectSingleNode retourne un booléen et remplit une variable par référence
-        if not XMLDom.SelectSingleNode('DMS', XMLDms) then
-            exit;
-
-        if not XMLNodeReq.SelectNodes('PR', XmlNodesPR) then
-            exit;
-
-        // --- Traitement Principal ---
-        if XmlNodesPR.Count > 0 then begin
-
-            // Recherche ou création du nœud racine LZRF08
-            if not XMLDms.SelectSingleNode('LZRF08', XMLNodeItem) then begin
-                XMLRoot := XmlElement.Create('LZRF08');
-                XMLDms.AsXmlElement().Add(XMLRoot);
-            end else
-                XMLRoot := XMLNodeItem.AsXmlElement();
-
-            // Récupération des attributs de XMLNodeReq
-            ORIGINEVENTE_Attribute := GetXmlAttribute(XMLNodeReq, 'ORIGINEVENTE');
-            DOSSIER_DMS_ID_Attribute := GetXmlAttribute(XMLNodeReq, 'DOSSIER_DMS_ID');
-
-            // Ajout des attributs par défaut
+        // Finalisation du statut global
+        if ErrorMO then begin
+            XMLRoot.SetAttribute('Code', '99');
+            XMLRoot.SetAttribute('TexteDMS', 'Erreur de valorisation MO');
+        end else begin
             XMLRoot.SetAttribute('Code', '0');
             XMLRoot.SetAttribute('TexteDMS', '');
-
-            // --- Boucle sur les éléments PR ---
-            for i := 1 to XmlNodesPR.Count do begin
-                XmlNodesPR.Get(i, XMLNodeItem);
-
-                // Extraction des valeurs d'attributs
-                CODEIMPUTATIONDMS_PR := GetAttributeValue(XMLDms, 'CLIENT_DMS_ID');
-
-                // Note: TypeXX semble être une variable non définie dans votre snippet, 
-                // je l'ai gardée telle quelle par rapport à votre logique.
-                //CheckCustomerByTypeImputation(GetAttributeValue(XMLNodeItem, TypeXX + '_PR'), CODEIMPUTATIONDMS_PR);
-
-                LIGNE_DT_ID := GetAttributeValue(XMLNodeItem, 'LIGNE_DT_ID');
-                //TYPEFACTURATION_PR := CopyStr(GetAttributeValue(XMLNodeItem, TypeXX + '_PR'), 1, 2);
-
-                // Appel de la procédure de traitement unitaire
-                // "LZRF08--PR"(XMLDom, XMLRoot, GetAttributeValue(XMLNodeItem, 'REFERENCE_PR'), CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
-            end;
         end;
+    end;
 
-        // Note: XMLDom.Validate() n'est généralement pas nécessaire en AL 
-        // sauf si vous utilisez un schéma XML spécifique.
+
+
+    local procedure GetSTFOperation(DMSCode: Code[20]): Code[20]
+    var
+        UnderscorePos: Integer;
+    begin
+        // 01490910_C → 01490910
+        // 22540210_CTR → 22540210
+        UnderscorePos := StrPos(DMSCode, '_');
+        if UnderscorePos > 1 then
+            exit(CopyStr(DMSCode, 1, UnderscorePos - 1));
+        exit(DMSCode); // pas de suffixe → retourne tel quel
     end;
 
     local procedure GetAttributeValue(Node: XmlNode; Name: Text): Text
@@ -1339,146 +1242,10 @@ codeunit 75101 "Business Layer"
     end;
 
 
-    /* procedure CheckCustomerByTypeImputation(lTypeImputation: Text[30]; var lClient: Text[30])
-    var
-        SBOXSetup: Record "STF Servicebox Setup"; // Remplacez par le nom réel de la table 60209
-    begin
-        if not SBOXSetup.Get() then
-            exit;
-
-        case lTypeImputation of
-            Format(SBOXSetup."Customer Imputation Code"):
-                if lClient = '' then
-                    lClient := SBOXSetup."Customer Imputation Code";
-
-            Format(SBOXSetup."Warranty Imputation Code"):
-                lClient := SBOXSetup."Warranty Imputation Code";
-
-            Format(SBOXSetup."Insurance Imputation Code"):
-                lClient := SBOXSetup."Insurance Imputation Code";
-
-            Format(SBOXSetup."Campaign Imputation Code"):
-                lClient := SBOXSetup."Campaign Imputation Code";
-
-            Format(SBOXSetup."Contract Imputation Code"):
-                lClient := SBOXSetup."Contract Imputation Code";
-
-            Format(SBOXSetup."Internal Imputation Code"):
-                lClient := SBOXSetup."Internal Imputation Code";
-            else
-                exit;
-        end;
-    end;
 
 
-    procedure LZRC01T01V1(var XMLDom: XmlDocument; XMLNodeReq: XmlElement; RqType: Text[30])
-    var
-        RecCustomer: Record Customer;
-        XMLDms: XmlElement;
-        XMLRoot: XmlElement;
-        XMLNode: XmlElement;
-        CodeInterrogation: Text;
-        ChampsCmpl: Text;
-        Count: Integer;
-        TypeCust: Integer;
-        TotalCount: Integer;
-    begin
-        // Récupération du nœud racine DMS
-        if not XMLDom.GetRoot(XMLDms) then exit;
 
-        // Création ou récupération du nœud LZRC01
-        XMLRoot := XmlElement.Create('LZRC01');
 
-        // Extraction des attributs de la requête (XMLNodeReq)
-        CodeInterrogation := GetAttributeValue(XMLNodeReq, 'CODE_INTERROGATION');
-        ChampsCmpl := GetAttributeValue(XMLNodeReq, 'CHAMPS_CMPL');
-
-        // Préparation des filtres
-        RecCustomer.Reset();
-        //RecCustomer.SetRange(Blocked, false);
-
-        case CodeInterrogation of
-            '1': // Nom
-                RecCustomer.SetFilter(Name, '%1', '*' + ChampsCmpl + '*');
-            '2': // Téléphone
-                RecCustomer.SetFilter("Phone No.", '%1', ChampsCmpl + '*');
-            /* '3': // Téléphone Domicile
-                RecCustomer.SetFilter("Home Phone No.", '%1', ChampsCmpl + '*');
-            * /***  '4': // N° Client
-                begin
-                    RecCustomer.SetCurrentKey("No.");
-                    RecCustomer.SetFilter("No.", '%1', ChampsCmpl + '*');
-                end;
-            '5': // Email
-                RecCustomer.SetFilter("E-Mail", '%1', ChampsCmpl + '*');
-            '6': // Mobile
-                RecCustomer.SetFilter("Mobile Phone No.", '%1', ChampsCmpl + '*');
-        end;
-
-        Count := 0;
-        TotalCount := RecCustomer.Count();
-
-        if RecCustomer.FindSet() then
-            repeat
-                XMLNode := XmlElement.Create('CLIENT');
-                XMLNode.SetAttribute('CLIENT_DMS_ID', RecCustomer."No.");
-
-                TypeCust :=1;// RecCustomer."Customer Type"; // Assumé Integer ou Option
-
-                case TypeCust of
-                    0: // Particulier ?
-                        begin
-                            XMLNode.SetAttribute('TypeClient', '1');
-                            XMLNode.SetAttribute('Nom', RecCustomer."Name");
-                            XMLNode.SetAttribute('Prenom', RecCustomer."Name 2");
-                        end;
-                    1: // Autre ?
-                        begin
-                            XMLNode.SetAttribute('TypeClient', '2');
-                            XMLNode.SetAttribute('Nom', RecCustomer."Name");
-                            //XMLNode.SetAttribute('Prenom', RecCustomer."First Name");
-                        end;
-                    /* 2: // Entreprise ?
-                        begin
-                            XMLNode.SetAttribute('TypeClient', '4');
-                            XMLNode.SetAttribute('TypeEntreprise', RecCustomer."Title Code");
-                            XMLNode.SetAttribute('RaisonSociale', RecCustomer.Name);
-                        end; *** /
-                end;
-
-                // Champs communs
-                XMLNode.SetAttribute('NumeroVoie', '');
-                XMLNode.SetAttribute('TypeVoie', '');
-                XMLNode.SetAttribute('Adresse1', RecCustomer.Address);
-                XMLNode.SetAttribute('Ville', RecCustomer.City);
-                XMLNode.SetAttribute('CodePostal', RecCustomer."Post Code");
-                XMLNode.SetAttribute('NumeroCompte', RecCustomer."No.");
-
-                XMLRoot.Add(XMLNode);
-                Count += 1;
-            until (RecCustomer.Next() = 0) or (Count = 30);
-
-        // Gestion des attributs de résultat sur LZRC01
-        if TotalCount = 1 then begin
-            XMLRoot.SetAttribute('Code', '0');
-            XMLRoot.SetAttribute('TexteDMS', '');
-            // Appel de la procédure de détail (à adapter selon votre conversion AL de LZRC03T03)
-            LZRC03T03V1(RecCustomer."No.", XMLDom, RqType);
-        end else if (TotalCount > 1) and (TotalCount < 30) then begin
-            XMLRoot.SetAttribute('Code', '0');
-            XMLRoot.SetAttribute('TexteDMS', Format(Count) + ' Clients trouvés.');
-        end else if TotalCount >= 30 then begin
-            XMLRoot.SetAttribute('Code', '95');
-            XMLRoot.SetAttribute('TexteDMS', 'Nombre de reponses trop grand. Precisez les parametres de recherche.');
-        end else begin
-            XMLRoot.SetAttribute('Code', '99');
-            XMLRoot.SetAttribute('TexteDMS', 'Aucun Client trouve avec ces criteres !');
-            XMLRoot.Add(XmlElement.Create('CLIENT'));
-        end;
-
-        XMLDms.Add(XMLRoot);
-    end;
-     */
 
 
     procedure LZRC01T01V1(var XMLRootDMS: XmlElement; XMLNodeReq: XmlElement; RqType: Text[30])
@@ -1502,7 +1269,8 @@ codeunit 75101 "Business Layer"
         // 2️⃣ Logique de filtrage
         case CodeInterrogation of
             '1':
-                RecCustomer.SetFilter(Name, '@*' + ChampsCmpl + '*');
+                RecCustomer.SetFilter(Name, '%1', '*' + ChampsCmpl + '*');
+            //RecCustomer.SetFilter(Name, '@*' + ChampsCmpl + '*');
             '2':
                 RecCustomer.SetFilter("Phone No.", '%1*', ChampsCmpl);
             '4':
@@ -1542,16 +1310,23 @@ codeunit 75101 "Business Layer"
             until (RecCustomer.Next() = 0) or (Count = 30);
 
         // 4️⃣ Finalisation des attributs de statut
+
         if TotalCount = 0 then begin
             XMLRoot.SetAttribute('Code', '99');
             XMLRoot.SetAttribute('TexteDMS', 'Aucun Client trouvé !');
-        end else if TotalCount >= 30 then begin
-            XMLRoot.SetAttribute('Code', '95');
-            XMLRoot.SetAttribute('TexteDMS', 'Trop de réponses. Précisez les paramètres.');
-        end else begin
-            XMLRoot.SetAttribute('Code', '0');
-            XMLRoot.SetAttribute('TexteDMS', Format(TotalCount) + ' Clients trouvés.');
-        end;
+        end
+        else
+            if TotalCount = 1 then begin
+                XMLRoot.SetAttribute('Code', '0');
+                XMLRoot.SetAttribute('TexteDMS', '');
+                LZRC03T03V1(RecCustomer."No.", XMLNodeReq, RqType);
+            end else if TotalCount >= 30 then begin
+                XMLRoot.SetAttribute('Code', '95');
+                XMLRoot.SetAttribute('TexteDMS', 'Trop de réponses. Précisez les paramètres.');
+            end else begin
+                XMLRoot.SetAttribute('Code', '0');
+                XMLRoot.SetAttribute('TexteDMS', Format(TotalCount) + ' Clients trouvés.');
+            end;
 
         // 5️⃣ CRITIQUE : On ajoute LZRC01 comme ENFANT de DMS
         // Cela évite l'erreur "operation cannot be performed in this context"
@@ -1567,548 +1342,7 @@ codeunit 75101 "Business Layer"
         exit('');
     end;
 
-    procedure LZRF10T13V1(TempRoot: XmlElement; XMLNodeReq: XmlElement; RqType: Text)
-    var
-        XMLRoot, XMLNode, XMLNodeCustomer, XMLNodeVehicle : XmlElement;
-        XmlNodesLDT, XMLNodesPR : XmlNodeList;
-        RecSalesHeader: Record "Sales Header";
-        RecServiceHeader: Record "Service Header EDMS";
-        RecCustomer: Record Customer;
-        RecVehicle: Record Vehicle;
-        RecLocation: Record Location;
-        Kilometrage: Decimal;
-        i, j : Integer;
-        NumPost: Code[10];
-        lREMISEDOSSIER, lPRIXDOSSIER_TTC, lREMISELDT, lREMISELDTTOT, lPRIXLDTTTC, lPRIXLDTTTCTOT : Decimal;
-        lTYPEREMISE: Integer;
-        eDMSSetup: Record "STF Servicebox Setup";
-        TmpNode: XmlElement;
-        XMLNodeLDT_Temp: XmlNode;
-        XMLNodePR_Temp: XmlNode;
-        LigneDT_ID: Text;
-        Text0003: Label 'Transfert du dossier réussi.';
-        Text0004: Label 'Mise à jour du dossier réussi.';
-        Text0007: Label 'Merci de renseigner le client de Passage PR dans le paramétrage eDMS.';
-    begin
-        XMLRoot := XmlElement.Create('LZRF10');
-        TempRoot.Add(XMLRoot);
 
-        XMLNodeCustomer := GetChildElement(XMLNodeReq, 'CLIENT');
-        XMLNodeVehicle := GetChildElement(XMLNodeReq, 'VEHICULE');
-        XMLNodeVehicle.SelectNodes('LDT', XmlNodesLDT);
-        AddAttribute(XMLRoot, 'LDTcount', Format(XmlNodesLDT.Count()));
-
-        NumPost := GetAttributeValue(XMLNodeReq, 'NumeroPoste');
-        if CheckUserSetup(GetAttributeValue(XMLNodeReq, 'ID_UTILISATEUR'), '001') then begin
-
-            eDMSSetup.Get();
-            if eDMSSetup.accountCustomerUpdate then
-                UpdateCustomer(XMLNodeCustomer);
-
-            // Remise dossier
-            if (GetAttributeValue(XMLNodeVehicle, 'REMISECLIENT') = '1') and
-               (eDMSSetup.interfaceVersion = '13') then begin
-                Evaluate(lREMISEDOSSIER,
-                    ConvertStr(GetAttributeValue(XMLNodeVehicle, 'REMISEDOSSIER'), '.', ','));
-                Evaluate(lTYPEREMISE,
-                    GetAttributeValue(XMLNodeVehicle, 'TYPEREMISE'));
-                Evaluate(lPRIXDOSSIER_TTC,
-                    ConvertStr(GetAttributeValue(XMLNodeVehicle, 'PRIXDOSSIER_TTC'), '.', ','));
-            end;
-
-            // =========================================================
-            // ORIGINEVENTE = 1 → Sales Order PR
-            // =========================================================
-            if GetAttributeValue(XMLNodeReq, 'ORIGINEVENTE') = '1' then begin
-
-                if (GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '') or
-                   (eDMSSetup.PRPassingAccount <> '') then begin
-
-                    if RecLocation.FindFirst() then; // garde silencieux — Location vide gérée ci-dessous
-
-                    RecSalesHeader.Init();
-                    RecSalesHeader."Document Type" := RecSalesHeader."Document Type"::Order;
-                    RecSalesHeader."Document Profile" := RecSalesHeader."Document Profile"::"Spare Parts Trade";
-
-                    if RecLocation.Code <> '' then
-                        RecSalesHeader.Validate("Location Code", RecLocation.Code);
-                    RecSalesHeader.SetHideValidationDialog(true);
-
-                    if GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '' then
-                        RecSalesHeader.Validate(
-                            "Sell-to Customer No.",
-                            GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID'))
-                    else
-                        RecSalesHeader.Validate(
-                            "Sell-to Customer No.",
-                            eDMSSetup.PRPassingAccount);
-
-                    RecSalesHeader.Validate("VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
-                    RecSalesHeader."Dossier SBOX" := true;
-                    RecSalesHeader.Insert(true);
-
-                    // Remise dossier
-                    if eDMSSetup."Discount allowed" then begin
-                        if lTYPEREMISE = 1 then
-                            RecSalesHeader.Validate("Payment Discount %", lREMISEDOSSIER)
-                        else
-                            if (lPRIXDOSSIER_TTC + lREMISEDOSSIER) > 0 then
-                                RecSalesHeader.Validate(
-                                    "Payment Discount %",
-                                    (lREMISEDOSSIER / (lPRIXDOSSIER_TTC + lREMISEDOSSIER)) * 100);
-                        RecSalesHeader.Modify(true);
-                    end;
-
-                    lREMISELDTTOT := 0;
-                    lPRIXLDTTTCTOT := 0;
-
-                    AddAttribute(XMLRoot, 'Code', '0');
-                    AddAttribute(XMLRoot, 'TexteDMS', Text0003);
-                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecSalesHeader."No.");
-
-                    // ── Boucle LDT (1-based) ──────────────────────────
-                    for i := 1 to XmlNodesLDT.Count() do begin
-
-                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
-                        LigneDT_ID := GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID');
-
-                        XMLNodeLDT_Temp.AsXmlElement().SelectNodes('PR', XMLNodesPR);
-
-                        // ── Boucle PR (1-based) ───────────────────────
-                        for j := 1 to XMLNodesPR.Count() do begin
-                            XMLNodesPR.Get(j, XMLNodePR_Temp);
-                            if j = 1 then
-                                InsertPRSalesLineLDT(
-                                    RecSalesHeader,
-                                    XMLNodePR_Temp.AsXmlElement(),
-                                    CopyStr(LigneDT_ID, 1, 20))
-                            else
-                                InsertPRSalesLine(
-                                    RecSalesHeader,
-                                    XMLNodePR_Temp.AsXmlElement(),
-                                    CopyStr(LigneDT_ID, 1, 20));
-                        end;
-
-                        // Remise LDT
-                        if eDMSSetup."Discount allowed LDT" then begin
-                            Evaluate(lREMISELDT,
-                                ConvertStr(
-                                    GetAttributeValue(
-                                        XMLNodeLDT_Temp.AsXmlElement(), 'REMISE_PRICING_LDT'),
-                                    '.', ','));
-                            Evaluate(lPRIXLDTTTC,
-                                ConvertStr(
-                                    GetAttributeValue(
-                                        XMLNodeLDT_Temp.AsXmlElement(), 'PRIXTTC_LDT'),
-                                    '.', ','));
-                            lREMISELDTTOT += lREMISELDT;
-                            lPRIXLDTTTCTOT += lPRIXLDTTTC;
-                        end;
-
-                        AddElement(XMLRoot, 'LDT', TmpNode);
-                        AddAttribute(TmpNode, 'LIGNE_DT_ID', LigneDT_ID);
-                        AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', LigneDT_ID);
-
-                    end; // fin boucle LDT
-
-                    // Remise LDT totale
-                    if eDMSSetup."Discount allowed LDT" then begin
-                        if (lREMISELDTTOT + lPRIXLDTTTCTOT) > 0 then
-                            RecSalesHeader.Validate(
-                                "Payment Discount %",
-                                RecSalesHeader."Payment Discount %" +
-                                ((lREMISELDTTOT / (lREMISELDTTOT + lPRIXLDTTTCTOT)) * 100));
-                        RecSalesHeader.Modify(true);
-                    end;
-
-                end else begin
-
-                    // Pas de client ni de compte de passage → erreur
-                    ErrorResponse(XMLRoot, Text0007);
-
-                    for i := 1 to XmlNodesLDT.Count() do begin
-                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
-                        AddElement(XMLRoot, 'LDT', TmpNode);
-                        AddAttribute(
-                            TmpNode, 'LIGNE_DT_ID',
-                            GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
-                    end;
-
-                end;
-
-                // =========================================================
-                // ORIGINEVENTE = 2 → Service Order EDMS
-                // =========================================================
-            end else if GetAttributeValue(XMLNodeReq, 'ORIGINEVENTE') = '2' then begin
-
-                RecServiceHeader.Init();
-                RecServiceHeader."Document Type" := RecServiceHeader."Document Type"::Order;
-                RecServiceHeader.Validate("Posting Date", WorkDate());
-                RecServiceHeader.Validate("Document Date", WorkDate());
-                RecServiceHeader.Validate("Deal Type", 'SR_LB');
-
-                // Validate client et VIN AVANT Insert
-                if RecCustomer.Get(GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID')) then
-                    RecServiceHeader.Validate("Sell-to Customer No.", RecCustomer."No.")
-                else
-                    RecServiceHeader.Validate("Sell-to Customer No.", eDMSSetup.PRPassingAccount);
-
-                RecServiceHeader.Validate("VIN", GetAttributeValue(XMLNodeVehicle, 'VIN'));
-                RecServiceHeader.Insert(true); // Insert en dernier
-
-                XMLNode := XmlElement.Create('DOSSIER');
-                AddAttribute(XMLNode, 'Code', '0');
-                AddAttribute(XMLNode, 'TexteDMS', 'Nouvelle Service Order EDMS créée.');
-                AddAttribute(XMLNode, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
-                XMLRoot.Add(XMLNode);
-
-                // =========================================================
-                // ORIGINEVENTE autre → APV / mise à jour dossier
-                // =========================================================
-            end else begin
-
-                if GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage') <> '' then
-                    Evaluate(Kilometrage,
-                        DelChr(GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage'), '=', ' '));
-
-                if RecVehicle.Get(GetAttributeValue(XMLNodeVehicle, 'VIN')) then
-                    if Kilometrage > RecVehicle."Variable Field Run 1" then begin
-                        RecVehicle."Variable Field Run 1" := Kilometrage;
-                        RecVehicle.Modify(true);
-                    end;
-
-                if GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID') <> '' then begin
-                    RecServiceHeader.Reset();
-                    RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
-                    RecServiceHeader.SetRange("No.", GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID'));
-                    if RecServiceHeader.FindFirst() then begin
-                        AddAttribute(XMLRoot, 'Code', '0');
-                        AddAttribute(XMLRoot, 'TexteDMS', Text0004);
-                        AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
-                    end;
-                end;
-
-            end;
-        end else begin
-            //     // Erreur Utilisateur
-            ErrorResponse(XMLRoot, 'L''utilisateur utilisé n''est pas paramétré dans Business Central.');
-        end;
-    end;
-
-    procedure LZRF10T13V111(TempRoot: XmlElement; XMLNodeReq: XmlElement; RqType: Text)
-    var
-        XMLDms, XMLRoot, XMLNode, XMLNodeCustomer, XMLNodeVehicle, XMLNodeServicePAD : XmlElement;
-        XmlNodesLDT, XMLNodesPR, XMLNodesPADANOMALIE, XMLNodesPADCATEGORIECV, XMLNodesPADCONTROLEVISUEL, XMLNodesPADCHOIX : XmlNodeList;
-        XMLNodeItem: XmlNode;
-        RecSalesHeader: Record "Sales Header";
-        RecServiceHeader: Record "Service Header EDMS"; // Assurez-vous que l'ID table correspond à votre extension
-        RecServiceJobLine: Record "Service Order Symptome  EDMS";
-        RecCustomer: Record Customer;
-        RecVehicle: Record Vehicle;
-        RecLocation: Record Location;
-        Kilometrage: Decimal;
-        i, j, PADi, PADj, PADk, JobLineNo : Integer;
-        lDAY, lMonth, lYEAR : Integer;
-        NumPost: Code[10];
-        lREMISEDOSSIER, lPRIXDOSSIER_TTC, lREMISELDT, lREMISELDTTOT, lPRIXLDTTTC, lPRIXLDTTTCTOT : Decimal;
-        lTYPEREMISE: Integer;
-        lCodeUpdateDelete: Text[30];
-        //RqType: Text[30];
-        eDMSSetup: Record "STF Servicebox Setup";
-
-        // variable manquante
-        TmpNode: XmlElement;
-        XMLNodeLDT_Temp: XmlNode;
-        XMLNodePR_Temp: XmlNode;
-        LigneDT_ID: Text;
-        // TextConstants
-        Text0001: Label 'L''utilisateur utilisé n''est pas paramétré dans INCADEA.';
-        Text0002: Label 'Merci de renseigner la limite de crédit dans le champ Observation.';
-        Text0003: Label 'Transfert du dossier réussi.';
-        Text0004: Label 'Mise à jour du dossier réussi.';
-        Text0007: Label 'Merci de renseigner le client de Passage PR dans le paramétrage eDMS.';
-    begin
-
-        // Création du nœud de réponse LZRF10
-        XMLRoot := XmlElement.Create('LZRF10');
-        TempRoot.Add(XMLRoot);
-
-        // 2. Extraction des données de la requête
-        XMLNodeCustomer := GetChildElement(XMLNodeReq, 'CLIENT');
-        XMLNodeVehicle := GetChildElement(XMLNodeReq, 'VEHICULE');
-        XMLNodeVehicle.SelectNodes('LDT', XmlNodesLDT);
-        //AddAttribute(XMLRoot, 'LDTcount', Format(XMLNodesLDT.Count()));
-
-
-        //XMLNodeReq.SelectNodes('//PR', XMLNodesPR);
-        //AddAttribute(XMLRoot, 'PRcount', Format(XMLNodesPR.Count()));
-
-
-
-        NumPost := GetAttributeValue(XMLNodeReq, 'NumeroPoste');
-
-        // 3. Vérification Utilisateur
-        // Vérification Utilisateur
-        //if CheckUserSetup(GetAttributeValue(XMLNodeReq, 'ID_UTILISATEUR'), '001') then begin
-        eDMSSetup.Get();
-        if eDMSSetup.accountCustomerUpdate then
-            UpdateCustomer(XMLNodeCustomer);
-
-        // --- Logique Remise Dossier ---
-        if (GetAttributeValue(XMLNodeVehicle, 'REMISECLIENT') = '1') and (eDMSSetup.interfaceVersion = '13') then begin
-            Evaluate(lREMISEDOSSIER, ConvertStr(GetAttributeValue(XMLNodeVehicle, 'REMISEDOSSIER'), '.', ','));
-            Evaluate(lTYPEREMISE, GetAttributeValue(XMLNodeVehicle, 'TYPEREMISE'));
-            Evaluate(lPRIXDOSSIER_TTC, ConvertStr(GetAttributeValue(XMLNodeVehicle, 'PRIXDOSSIER_TTC'), '.', ','));
-        end;
-
-        // --- Gestion selon ORIGINEVENTE ---
-        /*  if (GetAttributeValue(XMLNodeReq, 'ORIGINEVENTE') = '1') then begin
-
-             if (GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') = '') and
-                (eDMSSetup.PRPassingAccount = '') then begin
-
-                 ErrorResponse(XMLRoot, Text0007);
-                 exit;
-
-             end;
-
-             // Create Sales Header
-             RecSalesHeader.Init();
-             RecSalesHeader."Document Type" := RecSalesHeader."Document Type"::Order;
-             RecSalesHeader."Document Profile" := RecSalesHeader."Document Profile"::"Spare Parts Trade";
-
-             if RecLocation.FindFirst() then
-                 RecSalesHeader.Validate("Location Code", RecLocation.Code);
-
-             if GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '' then
-                 RecSalesHeader.Validate("Sell-to Customer No.",
-                     GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID'))
-             else
-                 RecSalesHeader.Validate("Sell-to Customer No.",
-                     eDMSSetup.PRPassingAccount);
-
-             RecSalesHeader.Validate("VIN SBOX",
-                 GetAttributeValue(XMLNodeVehicle, 'VIN'));
-
-             RecSalesHeader.Insert(true);
-
-             // SUCCESS RESPONSE
-             AddAttribute(XMLRoot, 'Code', '0');
-             AddAttribute(XMLRoot, 'TexteDMS', Text0003);
-             AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecSalesHeader."No.");
-
-             //================================================
-             // LDT LOOP
-             //================================================
-             for i := 1 to XmlNodesLDT.Count() do begin
-
-                 XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
-
-                 LigneDT_ID :=
-                 GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID');
-
-                 XMLNodeLDT_Temp.AsXmlElement().SelectNodes('PR', XMLNodesPR);
-
-                 for j := 1 to XMLNodesPR.Count() do begin
-
-                     XMLNodesPR.Get(j, XMLNodePR_Temp);
-
-                     if j = 1 then
-                         InsertPRSalesLineLDT(
-                             RecSalesHeader,
-                             XMLNodePR_Temp.AsXmlElement(),
-                             LigneDT_ID)
-                     else
-                         InsertPRSalesLine(
-                             RecSalesHeader,
-                             XMLNodePR_Temp.AsXmlElement(),
-                             LigneDT_ID);
-
-                 end;
-
-                 XMLNode := XmlElement.Create('LDT');
-                 AddAttribute(XMLNode, 'LIGNE_DT_ID', LigneDT_ID);
-                 AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', LigneDT_ID);
-
-                 XMLRoot.Add(XMLNode);
-
-             end;
-
-        */
-
-
-
-
-        if GetAttributeValue(XMLNodeReq, 'ORIGINEVENTE') = '1' then begin
-            if (GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '') or (eDMSSetup.PRPassingAccount <> '') then begin
-
-                RecLocation.FindFirst();
-
-                RecSalesHeader.Init();
-                RecSalesHeader."Document Type" := RecSalesHeader."Document Type"::Order;
-                RecSalesHeader."Document Profile" := RecSalesHeader."Document Profile"::"Spare Parts Trade";
-                RecSalesHeader.Validate("Location Code", RecLocation.Code);
-                RecSalesHeader.SetHideValidationDialog(true);
-
-                if GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '' then
-                    RecSalesHeader.Validate("Sell-to Customer No.", GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID'))
-                else
-                    RecSalesHeader.Validate("Sell-to Customer No.", eDMSSetup.PRPassingAccount);
-                RecSalesHeader.Validate("VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
-                RecSalesHeader."Dossier SBOX" := true;
-
-                RecSalesHeader.Insert(true);
-
-                if eDMSSetup."Discount allowed" then begin // and CheckUserPermissionAPV(Text0102, RecUserSetup) then begin
-                    if lTYPEREMISE = 1 then
-                        RecSalesHeader.Validate("Payment Discount %", lREMISEDOSSIER)
-                    else
-                        if (lPRIXDOSSIER_TTC + lREMISEDOSSIER) > 0 then
-                            RecSalesHeader.Validate("Payment Discount %",
-                                (lREMISEDOSSIER / (lPRIXDOSSIER_TTC + lREMISEDOSSIER)) * 100);
-
-                    RecSalesHeader.Modify(true);
-                end;
-
-                lREMISELDTTOT := 0;
-                lPRIXLDTTTCTOT := 0;
-
-                AddAttribute(XMLRoot, 'Code', '0');
-                AddAttribute(XMLRoot, 'TexteDMS', Text0003);
-                AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecSalesHeader."No.");
-
-                for i := 0 to XMLNodesLDT.Count() - 1 do begin
-
-                    XMLNodesLDT.Get(i, XMLNodeLDT_Temp);
-
-                    LigneDT_ID :=
-                        GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID');
-
-                    XMLNodeLDT_Temp.AsXmlElement().SelectNodes('PR', XMLNodesPR);
-                    for j := 0 to XMLNodesPR.Count() - 1 do begin
-
-                        XMLNodesPR.Get(j, XMLNodePR_Temp);
-
-                        if j = 0 then
-                            InsertPRSalesLineLDT(
-                                RecSalesHeader,
-                                XMLNodePR_Temp.AsXmlElement(),
-                                CopyStr(LigneDT_ID, 1, 20))
-                        else
-                            InsertPRSalesLine(
-                                RecSalesHeader,
-                                XMLNodePR_Temp.AsXmlElement(),
-                                CopyStr(LigneDT_ID, 1, 20));
-                    end;
-
-                    if eDMSSetup."Discount allowed LDT" then begin  // and CheckUserPermissionAPV(Text0102, RecUserSetup) then begin
-
-                        Evaluate(lREMISELDT,
-                            ConvertStr(
-                                GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'REMISE_PRICING_LDT'),
-                                '.', ','));
-
-                        Evaluate(lPRIXLDTTTC,
-                            ConvertStr(
-                                GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'PRIXTTC_LDT'),
-                                '.', ','));
-
-                        lREMISELDTTOT += lREMISELDT;
-                        lPRIXLDTTTCTOT += lPRIXLDTTTC;
-                    end;
-
-                    AddElement(XMLRoot, 'LDT', TmpNode);
-
-                    AddAttribute(TmpNode, 'LIGNE_DT_ID', LigneDT_ID);
-                    AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', LigneDT_ID);
-
-                end;
-
-                if eDMSSetup."Discount allowed LDT" then begin
-                    if (lREMISELDTTOT + lPRIXLDTTTCTOT) > 0 then
-                        RecSalesHeader.Validate(
-                            "Payment Discount %",
-                            RecSalesHeader."Payment Discount %" +
-                            ((lREMISELDTTOT / (lREMISELDTTOT + lPRIXLDTTTCTOT)) * 100));
-
-                    RecSalesHeader.Modify(true);
-                end;
-
-            end else begin
-
-                ErrorResponse(XMLRoot, Text0007);
-
-                for i := 0 to XMLNodesLDT.Count() - 1 do begin
-                    XMLNodesLDT.Get(i, XMLNodeLDT_Temp);
-
-                    AddElement(XMLRoot, 'LDT', TmpNode);
-                    AddAttribute(
-                        TmpNode,
-                        'LIGNE_DT_ID',
-                        GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
-                end;
-            end;
-
-
-
-
-
-
-
-
-            // Votre code de création Sales Order ici...
-        end else if GetAttributeValue(XMLNodeReq, 'ORIGINEVENTE') = '2' then begin
-            // --- Bloc nouvelle Service Order EDMS ---
-            RecServiceHeader.Init();
-            RecServiceHeader."Document Type" := RecServiceHeader."Document Type"::Order;
-            RecServiceHeader.Validate("Posting Date", WorkDate());
-            RecServiceHeader.Validate("Document Date", WorkDate());
-
-            RecServiceHeader.Validate("Deal Type", 'SR_LB');
-            RecServiceHeader.Insert(true);
-
-            if RecCustomer.Get(GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID')) then
-                RecServiceHeader.Validate("Sell-to Customer No.", RecCustomer."No.")
-            else
-                RecServiceHeader.Validate("Sell-to Customer No.", eDMSSetup.PRPassingAccount);
-
-            RecServiceHeader.Validate("VIN", GetAttributeValue(XMLNodeVehicle, 'VIN'));
-            RecServiceHeader.Modify();
-            // Réponse XML
-            XMLNode := XmlElement.Create('DOSSIER');
-            AddAttribute(XMLNode, 'Code', '0');
-            AddAttribute(XMLNode, 'TexteDMS', 'Nouvelle Service Order EDMS créée.');
-            AddAttribute(XMLNode, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
-            XMLRoot.Add(XMLNode);
-        end else begin
-            // --- Bloc APV ou autres cas ---
-            Evaluate(Kilometrage, DelChr(GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage'), '=', ' '));
-
-            if RecVehicle.Get(GetAttributeValue(XMLNodeVehicle, 'VIN')) then
-                if Kilometrage > RecVehicle."Variable Field Run 1" then begin
-                    RecVehicle."Variable Field Run 1" := Kilometrage;
-                    RecVehicle.Modify(true);
-                end;
-
-            // Logique mise à jour ou création dossier service
-            if GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID') <> '' then begin
-                RecServiceHeader.Reset();
-                RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
-                RecServiceHeader.SetRange("No.", GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID'));
-                if RecServiceHeader.FindFirst() then begin
-                    AddAttribute(XMLRoot, 'Code', '0');
-                    AddAttribute(XMLRoot, 'TexteDMS', Text0004);
-                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
-                end;
-            end;
-        end;
-
-    end;
-    // else begin
-    //     // Erreur Utilisateur
-    //     ErrorResponse(XMLRoot, Text0001);
-    // end;
-    //end;
 
     procedure AddElement(var Parent: XmlElement; NodeName: Text; var NewNode: XmlElement)
     begin
@@ -2144,6 +1378,7 @@ codeunit 75101 "Business Layer"
         item: Record Item;
     begin
         if not item.Get(GetItemNo(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'))) then
+            //  CreateItem(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'), GetAttributeValue(XMLNodePR, 'LibellePR'), '');
             exit;
         RecSalesLine.Init();
         RecSalesLine."Document Type" := RecSalesHeader."Document Type";
@@ -2151,7 +1386,12 @@ codeunit 75101 "Business Layer"
         RecSalesLine."Line No." := GetNextSalesLineNo(RecSalesHeader);
         RecSalesLine.Validate(Type, RecSalesLine.Type::Item);
         RecSalesLine.Validate("No.", item."No.");
-        if Evaluate(qte, ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'), '.', ',')) then;
+        // if Evaluate(qte, ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'), '.', ',')) then;
+
+        qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteCommandee'));
+        if qte = 0 then
+            qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'));
+
         RecSalesLine.Validate(Quantity, qte);
         RecSalesLine."Line LDT" := LigneDT;
         RecSalesLine.Insert(true);
@@ -2164,8 +1404,11 @@ codeunit 75101 "Business Layer"
         qte: Decimal;
         item: Record Item;
     begin
-        if not item.Get(GetItemNo(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'))) then
+        if not item.Get(GetItemNo(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'))) then begin
+            /*  CreateItem(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'), GetAttributeValue(XMLNodePR, 'LibellePR'), '');
+             item.Get(GetItemNo(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'))); */
             exit;
+        end;
         RecSalesLine.Init();
         RecSalesLine."Document Type" := RecSalesHeader."Document Type";
         RecSalesLine."Document No." := RecSalesHeader."No.";
@@ -2174,7 +1417,12 @@ codeunit 75101 "Business Layer"
         RecSalesLine.Validate("No.", item."No.");
         RecSalesLine."Line LDT" := LigneDT;
         RecSalesLine."Line LDT Filter" := LigneDT;
-        if Evaluate(qte, ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'), '.', ',')) then;
+        //if Evaluate(qte, ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'), '.', ',')) then;
+
+        qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteCommandee'));
+        if qte = 0 then
+            qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'));
+
         RecSalesLine.Validate(Quantity, qte);
         RecSalesLine.Insert(true);
     end;
@@ -2225,18 +1473,14 @@ codeunit 75101 "Business Layer"
     end;
 
 
-    procedure CheckUserSetup(Utilisateur: Text[30]; PostCode: Code[10]) userOK: Boolean
-
+    procedure CheckUserSetup(Utilisateur: Text[30]; PostCode: Code[10]; var RecLocation: Record Location; var RecServiceLocation: Record Location): Boolean
     var
-        RecLocation: Record Location;
-        RecUserSetup: Record "User Setup";
-        RecWarehouseEmployee: Record "Warehouse Employee";
+        userOK: Boolean;
     begin
         userOK := false;
         Clear(RecUserSetup);
         RecUserSetup.Reset();
 
-        // On cherche l'utilisateur via son code ServiceBOX (SBOX)
         RecUserSetup.SetRange("ServiceBOX Code", Utilisateur);
 
         if RecUserSetup.FindFirst() then begin
@@ -2244,31 +1488,42 @@ codeunit 75101 "Business Layer"
             RecWarehouseEmployee.SetRange("User ID", RecUserSetup."User ID");
             RecWarehouseEmployee.SetRange("Service BOX Location", true);
 
-            // Gestion multi-magasins basée sur le code poste
             if RecWarehouseEmployee.Count > 1 then begin
                 if PostCode <> '' then
                     RecWarehouseEmployee.SetRange("Service BOX Post", PostCode);
             end;
 
             if RecWarehouseEmployee.FindFirst() then begin
-                RecLocation.Reset();
+
+                // 🔹 Location standard (inchangée)
                 if RecLocation.Get(RecWarehouseEmployee."Location Code") then begin
-                    userOK := true;
+
+                    // 🔹 Nouvelle Service Location
+                    if RecWarehouseEmployee."Service Location Code" <> '' then
+                        RecServiceLocation.Get(RecWarehouseEmployee."Service Location Code");
+
+                    exit(true);
                 end;
-            end
-            else begin
-                // Logique de repli (Fallback) : on cherche la première localisation SBOX sans filtre de poste
+
+            end else begin
+                // fallback
                 RecWarehouseEmployee.Reset();
                 RecWarehouseEmployee.SetRange("User ID", RecUserSetup."User ID");
                 RecWarehouseEmployee.SetRange("Service BOX Location", true);
-                if RecWarehouseEmployee.FindFirst() then begin
-                    RecLocation.Reset();
+
+                if RecWarehouseEmployee.FindFirst() then
                     if RecLocation.Get(RecWarehouseEmployee."Location Code") then begin
-                        userOK := true;
+
+                        // 🔹 Nouvelle Service Location (fallback aussi)
+                        if RecWarehouseEmployee."Service Location Code" <> '' then
+                            RecServiceLocation.Get(RecWarehouseEmployee."Service Location Code");
+
+                        exit(true);
                     end;
-                end;
             end;
         end;
+
+        exit(false);
     end;
 
     procedure UpdateCustomer(XMLNodeClient: XmlElement)
@@ -2377,7 +1632,7 @@ codeunit 75101 "Business Layer"
         // La validation se fait généralement au moment du chargement (Load) ou via un schéma XSD si nécessaire.
     end;
 
-    procedure LZRC03T03V1(CLIENT_DMS_ID: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
+    procedure LZRC03T03V1ll(CLIENT_DMS_ID: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
     var
         RecCustomer: Record Customer;
         XMLRoot: XmlElement;
@@ -2451,103 +1706,172 @@ codeunit 75101 "Business Layer"
             XMLRoot.SetAttribute('Code', '99');
             XMLRoot.SetAttribute('TexteDMS', 'Client ' + CLIENT_DMS_ID + ' inconnu');
         end;
-
+        /*   IF (RqType='01') OR (RqType='02') OR (RqType='03') THEN
+         LZRC07T05V1(RecCustomer."No.", XMLRootDMS, XMLNodeReq, RqType); */
         // 3. AJOUT au nœud parent <DMS> au lieu du Document
         XMLRootDMS.Add(XMLRoot);
     end;
 
-    procedure LZRC02T02V1(VEHICULE_DMS_ID: Text[30]; VIN: Text[30]; IMMATRICULATION: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
+    // ============================================================
+    // 1. LZRC23 — Données techniques du véhicule
+    // ============================================================
+    procedure LZRC23T09V1(VEHICULE_DMS_ID: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
     var
-        RecVehicle: Record "Vehicle"; // Table 5025400
-        RecCustomer: Record Customer;
+        RecVehicle: Record "Vehicle";
         XMLRoot: XmlElement;
         XMLNode: XmlElement;
+        ExistingNode: XmlNode;
+        DateToUse: Date;
+    begin
+        // Sécurité anti-récursion
+        if XMLRootDMS.SelectSingleNode('LZRC23', ExistingNode) then exit;
+
+        XMLRoot := XmlElement.Create('LZRC23');
+
+        RecVehicle.Reset();
+        RecVehicle.SetRange(VIN, VEHICULE_DMS_ID);
+
+        if RecVehicle.FindFirst() then begin
+            XMLRoot.SetAttribute('Code', '0');
+            XMLRoot.SetAttribute('TexteDMS', '');
+
+            XMLNode := XmlElement.Create('VEHICULE');
+            XMLNode.SetAttribute('VEHICULE_DMS_ID', RecVehicle.VIN);
+            XMLNode.SetAttribute('VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
+            XMLNode.SetAttribute('VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
+            XMLNode.SetAttribute('VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
+            XMLNode.SetAttribute('Immatriculation', RecVehicle."Registration No.");
+            XMLNode.SetAttribute('LibelleMarque', RecVehicle."Make Code");
+            XMLNode.SetAttribute('LibelleModele', RecVehicle."Model Code");
+
+            // Gestion de la date de mise en circulation
+            if RecVehicle."First Registration Date" <> 0D then
+                DateToUse := RecVehicle."First Registration Date"
+            else
+                DateToUse := RecVehicle."Creation Date";
+
+            if DateToUse <> 0D then begin
+                XMLNode.SetAttribute('AnneeMiseCirculation', Format(Date2DMY(DateToUse, 3)));
+                XMLNode.SetAttribute('MoisMiseCirculation', Format(Date2DMY(DateToUse, 2)));
+                XMLNode.SetAttribute('JourMiseCirculation', Format(Date2DMY(DateToUse, 1)));
+            end;
+
+            // Format 9 = XML Standard (pas d'espaces dans les milliers)
+            XMLNode.SetAttribute('DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, 9));
+            XMLNode.SetAttribute('TypeEntretien', RecVehicle.VIN);
+
+            XMLRoot.Add(XMLNode);
+            XMLRootDMS.Add(XMLRoot); // Ajout immédiat au document principal
+
+            // CASCADE vers LZRC02 (Identification Client)
+            if RecVehicle."Customer No." <> '' then
+                LZRC02T02V1(RecVehicle.VIN, RecVehicle.VIN, RecVehicle."Registration No.", XMLRootDMS, RqType);
+
+        end else begin
+            XMLRoot.SetAttribute('Code', '99');
+            XMLRoot.SetAttribute('TexteDMS', 'Véhicule introuvable');
+            XMLRootDMS.Add(XMLRoot);
+        end;
+    end;
+
+    // ============================================================
+    // 2. LZRC02 — Identification rapide du propriétaire
+    // ============================================================
+    procedure LZRC02T02V1(VEHICULE_DMS_ID: Text[30]; VIN: Text[30]; IMMATRICULATION: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
+    var
+        RecVehicle: Record "Vehicle";
+        RecCustomer: Record Customer;
+        XMLRoot, XMLNode : XmlElement;
+        ExistingNode: XmlNode;
         Count: Integer;
     begin
-        // 1. Création de l'élément LZRC02
-        XMLRoot := XmlElement.Create('LZRC02');
+        if XMLRootDMS.SelectSingleNode('LZRC02', ExistingNode) then exit;
 
-        // 2. Recherche du véhicule
+        XMLRoot := XmlElement.Create('LZRC02');
         RecVehicle.Reset();
         if (VEHICULE_DMS_ID <> '') then
             RecVehicle.SetRange(VIN, VEHICULE_DMS_ID)
         else if (VIN <> '') then
             RecVehicle.SetRange(VIN, VIN)
-        else if (IMMATRICULATION <> '') then
-            RecVehicle.SetRange("Registration No.", IMMATRICULATION);
+        else if (IMMATRICULATION <> '') then RecVehicle.SetRange("Registration No.", IMMATRICULATION);
 
-        Count := 0;
+        if RecVehicle.FindFirst() and (RecVehicle."Customer No." <> '') then begin
+            RecCustomer.Reset();
+            RecCustomer.SetRange("No.", RecVehicle."Customer No.");
+            RecCustomer.SetRange(Blocked, RecCustomer.Blocked::" ");
 
-        // 3. Logique de décision
-        if (VEHICULE_DMS_ID = '') and (VIN = '') and (IMMATRICULATION = '') then begin
-            XMLRoot.SetAttribute('Code', '1');
-            XMLRoot.SetAttribute('TexteDMS', 'La recherche par véhicule est impossible. Veuillez indiquer le VIN.');
-        end else if RecVehicle.FindFirst() then begin
+            if RecCustomer.FindSet() then begin
+                repeat
+                    Count += 1;
+                    XMLNode := XmlElement.Create('CLIENT');
+                    XMLNode.SetAttribute('CLIENT_DMS_ID', RecCustomer."No.");
 
-            if RecVehicle."Customer No." <> '' then begin
-                RecCustomer.Reset();
-                RecCustomer.SetRange("No.", RecVehicle."Customer No.");
-                RecCustomer.SetRange(Blocked, RecCustomer.Blocked::" ");
+                    // Mapping conforme au Flux B (Type 4 = RaisonSociale)
+                    if RecCustomer."Partner Type" = RecCustomer."Partner Type"::Company then begin
+                        XMLNode.SetAttribute('TypeClient', '4');
+                        XMLNode.SetAttribute('RaisonSociale', RecCustomer.Name);
+                    end else begin
+                        XMLNode.SetAttribute('TypeClient', '1');
+                        XMLNode.SetAttribute('Nom', RecCustomer.Name);
+                    end;
 
-                if RecCustomer.FindSet() then begin
-                    repeat
-                        Count += 1;
-                        XMLNode := XmlElement.Create('CLIENT');
-                        XMLNode.SetAttribute('CLIENT_DMS_ID', RecCustomer."No.");
-
-                        case RecCustomer."Partner Type" of
-                            RecCustomer."Partner Type"::Person:
-                                begin
-                                    XMLNode.SetAttribute('TypeClient', '1');
-                                    XMLNode.SetAttribute('Nom', RecCustomer.Name);
-                                    XMLNode.SetAttribute('Prenom', RecCustomer."Name 2");
-                                end;
-                            RecCustomer."Partner Type"::Company:
-                                begin
-                                    XMLNode.SetAttribute('TypeClient', '4');
-                                    XMLNode.SetAttribute('RaisonSociale', RecCustomer.Name);
-                                end;
-                            else begin
-                                XMLNode.SetAttribute('TypeClient', '2');
-                                XMLNode.SetAttribute('Nom', RecCustomer.Name);
-                            end;
-                        end;
-
-                        XMLNode.SetAttribute('NumeroVoie', '');
-                        XMLNode.SetAttribute('TypeVoie', '');
-                        XMLNode.SetAttribute('Adresse1', RecCustomer.Address);
-                        XMLNode.SetAttribute('Ville', RecCustomer.City);
-                        XMLNode.SetAttribute('CodePostal', RecCustomer."Post Code");
-                        XMLNode.SetAttribute('NumeroCompte', RecCustomer."No.");
-
-                        XMLRoot.Add(XMLNode);
-                    until (RecCustomer.Next() = 0) or (Count = 30);
-                end;
-            end else begin
-                XMLRoot.SetAttribute('Code', '98');
-                XMLRoot.SetAttribute('TexteDMS', 'Aucun client n''est associé à ce véhicule.');
+                    XMLNode.SetAttribute('Adresse1', RecCustomer.Address);
+                    XMLNode.SetAttribute('Ville', RecCustomer.City);
+                    XMLNode.SetAttribute('CodePostal', RecCustomer."Post Code");
+                    XMLNode.SetAttribute('NumeroCompte', RecCustomer."No.");
+                    XMLRoot.Add(XMLNode);
+                until (RecCustomer.Next() = 0) or (Count = 30);
             end;
         end;
 
-        // 4. Finalisation du statut
-        if (Count = 1) then begin
-            // ATTENTION : Si tu appelles LZRC03 ici, assure-toi qu'elle accepte aussi XmlElement
-            LZRC03T03V1(RecVehicle."Customer No.", XMLRootDMS, RqType);
-            exit;
-        end;
+        XMLRootDMS.Add(XMLRoot); // Ajout systématique au document
 
-        if (Count > 1) and (Count < 30) then begin
+        // CASCADE vers LZRC03 (Détails complets) si client unique
+        if (Count = 1) then
+            LZRC03T03V1(RecVehicle."Customer No.", XMLRootDMS, RqType);
+    end;
+
+    // ============================================================
+    // 3. LZRC03 — Fiche Client complète (Contacts & Solde)
+    // ============================================================
+    procedure LZRC03T03V1(CLIENT_DMS_ID: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
+    var
+        RecCustomer: Record Customer;
+        XMLRoot, XMLNode : XmlElement;
+        ExistingNode: XmlNode;
+    begin
+        if XMLRootDMS.SelectSingleNode('LZRC03', ExistingNode) then exit;
+
+        XMLRoot := XmlElement.Create('LZRC03');
+        RecCustomer.Reset();
+        if RecCustomer.Get(CLIENT_DMS_ID) then begin
             XMLRoot.SetAttribute('Code', '0');
             XMLRoot.SetAttribute('TexteDMS', '');
-        end else if (Count >= 30) then begin
-            XMLRoot.SetAttribute('Code', '95');
-            XMLRoot.SetAttribute('TexteDMS', 'Nombre de réponses trop grand. Précisez les paramètres.');
-        end else if (XMLRoot.Attributes().Count() = 0) then begin
-            XMLRoot.SetAttribute('Code', '99');
-            XMLRoot.SetAttribute('TexteDMS', 'Véhicule ou Client non trouvé.');
-        end;
+            RecCustomer.CalcFields(Balance);
 
-        // 5. AJOUT à la racine DMS (L'étape qui corrige l'erreur)
+            XMLNode := XmlElement.Create('CLIENT');
+            XMLNode.SetAttribute('CLIENT_DMS_ID', RecCustomer."No.");
+
+            // Mapping Société vs Particulier
+            if RecCustomer."Partner Type" = RecCustomer."Partner Type"::Company then begin
+                XMLNode.SetAttribute('TypeClient', '4');
+                XMLNode.SetAttribute('RaisonSociale', RecCustomer.Name);
+            end else begin
+                XMLNode.SetAttribute('TypeClient', '1');
+                XMLNode.SetAttribute('Nom', RecCustomer.Name);
+            end;
+
+            XMLNode.SetAttribute('PhoneMobile', RecCustomer."Mobile Phone No.");
+            XMLNode.SetAttribute('PhoneBureau', RecCustomer."Phone No.");
+            XMLNode.SetAttribute('Adresse1', RecCustomer.Address);
+            XMLNode.SetAttribute('Ville', RecCustomer.City);
+            XMLNode.SetAttribute('CodePostal', RecCustomer."Post Code");
+            XMLNode.SetAttribute('Pays', (RecCustomer."Country/Region Code" <> '') ? RecCustomer."Country/Region Code" : 'TN');
+            XMLNode.SetAttribute('SoldeClient', Format(RecCustomer.Balance, 0, 9));
+            XMLNode.SetAttribute('NumeroCompte', RecCustomer."No.");
+
+            XMLRoot.Add(XMLNode);
+        end;
         XMLRootDMS.Add(XMLRoot);
     end;
 
@@ -2619,6 +1943,9 @@ codeunit 75101 "Business Layer"
         XMLRootDMS.Add(XMLRoot);
     end;
 
+    // ============================================================
+    // LZRC08T06V1 — Interrogation liste de véhicules
+    // ============================================================
     procedure LZRC08T06V1(var XMLRootDMS: XmlElement; XMLNodeReq: XmlElement; RqType: Text[30])
     var
         RecVehicle: Record "Vehicle";
@@ -2627,11 +1954,15 @@ codeunit 75101 "Business Layer"
         CODE_INTERROGATION: Text[30];
         CHAMPS_CMPL: Text[30];
         Count, TotalVehicles : Integer;
+        ExistingNode: XmlNode;
     begin
+        // 1. Safety Check: If LZRC08 already exists in the response, don't run again (prevents recursion)
+        if XMLRootDMS.SelectSingleNode('LZRC08', ExistingNode) then
+            exit;
+
         CODE_INTERROGATION := GetAttributeValue(XMLNodeReq, 'CODE_INTERROGATION');
         CHAMPS_CMPL := GetAttributeValue(XMLNodeReq, 'CHAMPS_CMPL');
 
-        // 1. Crée le bloc racine LZRC08
         XMLRoot := XmlElement.Create('LZRC08');
 
         RecVehicle.Reset();
@@ -2666,43 +1997,52 @@ codeunit 75101 "Business Layer"
                 XMLRoot.Add(XMLNode);
             until (RecVehicle.Next() = 0) or (Count = 30);
 
-            if TotalVehicles >= 30 then begin
-                XMLRoot.SetAttribute('Code', '95');
-                XMLRoot.SetAttribute('TexteDMS', 'Trop de réponses.');
-            end else begin
+            if TotalVehicles = 1 then begin
+                // 1 seul véhicule found -> Success
                 XMLRoot.SetAttribute('Code', '0');
                 XMLRoot.SetAttribute('TexteDMS', '');
+                XMLRootDMS.Add(XMLRoot); // Add LZRC08 to the document BEFORE calling next step
+
+                // Cascade call
+                LZRC23T09V1(RecVehicle.VIN, XMLRootDMS, RqType);
+                exit;
+            end else if (TotalVehicles > 1) and (TotalVehicles < 30) then begin
+                XMLRoot.SetAttribute('Code', '0');
+                XMLRoot.SetAttribute('TexteDMS', Format(Count) + ' enregistrements trouvés.');
+            end else if TotalVehicles >= 30 then begin
+                XMLRoot.SetAttribute('Code', '95');
+                XMLRoot.SetAttribute('TexteDMS', 'Nombre de réponses trop grand. Précisez les paramètres de recherche.');
             end;
         end else begin
             XMLRoot.SetAttribute('Code', '99');
             XMLRoot.SetAttribute('TexteDMS', 'Aucun véhicule trouvé avec ces critères !');
         end;
 
-        // 2. AJOUT FINAL AU PARENT UNIQUE
         XMLRootDMS.Add(XMLRoot);
     end;
 
-    procedure LZRC23T09V1(var XMLRootDMS: XmlElement; XMLNodeReq: XmlElement; RqType: Text[30])
+    // ============================================================
+    // LZRC23T09V1 — Interrogation données commerciales
+    // ============================================================
+    procedure LZRC23T09V1lll(VEHICULE_DMS_ID: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
     var
-        RecVehicle: Record "Vehicle"; // Table 5025400
+        RecVehicle: Record "Vehicle";
         XMLRoot: XmlElement;
         XMLNode: XmlElement;
-        VEHICULE_DMS_ID: Text[30];
         DateToUse: Date;
+        ExistingNode: XmlNode;
+        XMLNodeReqCascade: XmlElement;
     begin
-        // 1. Extraction de l'ID Véhicule (priorité à VEHICULE_DMS_ID, sinon VIN)
-        VEHICULE_DMS_ID := GetAttributeValue(XMLNodeReq, 'VEHICULE_DMS_ID');
-        if VEHICULE_DMS_ID = '' then
-            VEHICULE_DMS_ID := GetAttributeValue(XMLNodeReq, 'VIN');
+        // 1. Safety Check: If LZRC23 already exists, don't run again
+        if XMLRootDMS.SelectSingleNode('LZRC23', ExistingNode) then
+            exit;
 
-        // 2. Création du nœud de réponse LZRC23
         XMLRoot := XmlElement.Create('LZRC23');
 
         RecVehicle.Reset();
         RecVehicle.SetRange(VIN, VEHICULE_DMS_ID);
 
         if RecVehicle.FindFirst() then begin
-            // ✅ Code 0 : Véhicule trouvé
             XMLRoot.SetAttribute('Code', '0');
             XMLRoot.SetAttribute('TexteDMS', '');
 
@@ -2710,16 +2050,13 @@ codeunit 75101 "Business Layer"
             XMLNode.SetAttribute('VEHICULE_DMS_ID', RecVehicle.VIN);
             XMLNode.SetAttribute('LibelleMarque', RecVehicle."Make Code");
             XMLNode.SetAttribute('LibelleModele', RecVehicle."Model Code");
-
-            // Décomposition du VIN pour le catalogue PSA (WMI=3, VDS=6, VIS=8)
             XMLNode.SetAttribute('VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
             XMLNode.SetAttribute('VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
             XMLNode.SetAttribute('VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
-
             XMLNode.SetAttribute('Immatriculation', RecVehicle."Registration No.");
 
-            // Gestion de la date de mise en circulation
-            if (RecVehicle."First Registration Date" <> 0D) then
+            // Missing Circulation Date Logic
+            if RecVehicle."First Registration Date" <> 0D then
                 DateToUse := RecVehicle."First Registration Date"
             else
                 DateToUse := RecVehicle."Creation Date";
@@ -2730,167 +2067,28 @@ codeunit 75101 "Business Layer"
                 XMLNode.SetAttribute('JourMiseCirculation', Format(Date2DMY(DateToUse, 1)));
             end;
 
-            // Kilométrage (Format 0, 9 pour éviter les espaces de milliers)
-            XMLNode.SetAttribute('DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, 9));
-
+            // Missing Mileage & Labor Type
+            XMLNode.SetAttribute('DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, '<Standard Format,2>'));
             XMLNode.SetAttribute('CodeOPB', '');
-            XMLNode.SetAttribute('TypeEntretien', '');
+            XMLNode.SetAttribute('TypeEntretien', RecVehicle.VIN); // Following your decoded example logic
 
             XMLRoot.Add(XMLNode);
+            XMLRootDMS.Add(XMLRoot); // Add to document
 
-            // 3. Appel en cascade vers la liste des clients (T02) 
-            // Note : On passe XMLRootDMS (le nœud <DMS>) conformément à la nouvelle signature de T02
-            if RqType in ['05', '06', '09'] then
-                LZRC02T02V1(RecVehicle.VIN, RecVehicle.VIN, RecVehicle."Registration No.", XMLRootDMS, RqType);
+            // Cascade back to LZRC08 ONLY if needed by RqType
+            if RqType in ['05', '06', '09'] then begin
+                XMLNodeReqCascade := XmlElement.Create('Request');
+                XMLNodeReqCascade.SetAttribute('CODE_INTERROGATION', '1');
+                XMLNodeReqCascade.SetAttribute('CHAMPS_CMPL', RecVehicle.VIN);
+                LZRC02T02V1(RecVehicle.vin, RecVehicle.VIN, RecVehicle."Registration No.", XMLRootDMS, RqType);
+            end;
 
         end else begin
-            // ❌ Code 99 : Véhicule introuvable
             XMLRoot.SetAttribute('Code', '99');
             XMLRoot.SetAttribute('TexteDMS', 'Véhicule introuvable');
+            XMLRootDMS.Add(XMLRoot);
         end;
-
-        // 4. AJOUT de LZRC23 au nœud parent <DMS>
-        XMLRootDMS.Add(XMLRoot);
     end;
-
-
-    procedure LZRF51T51V1LVV(var XMLRootDMS: XmlElement; XMLNodeReq: XmlElement)
-    var
-        RecServiceHeader: Record "Service Header EDMS";
-        RecSaleHeader: Record "Sales Header";
-        RecSaleLine: Record "Sales Line";
-        XMLRoot: XmlElement;
-        XMLNode: XmlElement;
-        XMLNodeLDT: XmlElement;
-        XMLNodePR: XmlElement;
-        CodeInterr: Text;
-        DossierDmsId: Text;
-        Hours: Integer;
-        Minutes: Integer;
-        Count: Integer;
-        TypeXX: Text;
-    begin
-        TypeXX := 'SBOX';
-
-        // 1. Création directe du nœud LZRF51 (plus besoin de SingleSelect ou GetRoot)
-        XMLRoot := XmlElement.Create('LZRF51');
-
-        CodeInterr := GetAttributeValue(XMLNodeReq, 'CODE_INTERROGATION_DMS');
-        DossierDmsId := GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID');
-
-        case CodeInterr of
-            '1', '2':
-                begin
-                    RecServiceHeader.Reset();
-                    RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
-                    RecServiceHeader.SetRange("No.", DossierDmsId);
-                    if RecServiceHeader.FindSet() then begin
-                        XMLRoot.SetAttribute('Code', '0');
-                        XMLRoot.SetAttribute('TexteDMS', '');
-                        repeat
-                            // Assure-toi que cette fonction prend XMLRoot en XmlElement
-                            FillBasicAttributes(XMLRoot, RecServiceHeader."No.", '1');
-                        until RecServiceHeader.Next() = 0;
-                    end;
-                end;
-
-            '3':
-                begin
-                    if DossierDmsId.StartsWith('F') then
-                        // ✅ CORRECTION : Passer XMLRootDMS (ou XMLRoot selon ta fonction historique)
-                        LZRF51T51FV1(XMLRootDMS, XMLNodeReq, DossierDmsId)
-                    else if DossierDmsId.StartsWith('CV') then begin
-                        // --- TRAITEMENT VENTE PR ---
-                        RecSaleHeader.Reset();
-                        RecSaleHeader.SetRange("Document Type", RecSaleHeader."Document Type"::Order);
-                        RecSaleHeader.SetRange("No.", DossierDmsId);
-                        if RecSaleHeader.FindFirst() then begin
-                            XMLRoot.SetAttribute('Code', '0');
-                            XMLRoot.SetAttribute('DOSSIER_DMS_ID', RecSaleHeader."No.");
-                            XMLRoot.SetAttribute('TexteDMS', '');
-                            XMLRoot.SetAttribute('ETATDOSSIERDMS', '1');
-                            XMLRoot.SetAttribute('RDV_DMS_ID', RecSaleHeader."No.");
-                            XMLRoot.SetAttribute('ANNEERDV', Format(Date2DMY(RecSaleHeader."Order Date", 3)));
-                            XMLRoot.SetAttribute('MOISRDV', Format(Date2DMY(RecSaleHeader."Order Date", 2)));
-                            XMLRoot.SetAttribute('JOURRDV', Format(Date2DMY(RecSaleHeader."Order Date", 1)));
-
-                            // Assure-toi que ces helpers prennent XMLRoot en XmlElement
-                            AddClientNode(XMLRoot, RecSaleHeader."Sell-to Customer No.");
-                            AddVehicleNode(XMLRoot, RecSaleHeader."VIN SBOX");
-
-                            RecSaleLine.SetRange("Document Type", RecSaleHeader."Document Type");
-                            RecSaleLine.SetRange("Document No.", RecSaleHeader."No.");
-                            if RecSaleLine.FindSet() then begin
-                                XMLNodeLDT := XmlElement.Create('LDT');
-                                XMLNodeLDT.SetAttribute(TypeXX + '_LDT', '1');
-                                XMLNodeLDT.SetAttribute('CODEIMPUTATION_LDT', RecSaleHeader."Sell-to Customer No.");
-                                XMLNodeLDT.SetAttribute('LIGNE_DT_ID', RecSaleLine."Line LDT");
-                                repeat
-                                    XMLNodePR := XmlElement.Create('PR');
-                                    XMLNodePR.SetAttribute('LIGNE_DT_ID', RecSaleLine."Line LDT");
-                                    XMLNodePR.SetAttribute('LIGNE_DT_ID_DMS', Format(RecSaleLine."Line No."));
-                                    XMLNodePR.SetAttribute('REFERENCE_PR', RecSaleLine."No.");
-                                    XMLNodePR.SetAttribute('LIBELLE_PR', RecSaleLine.Description);
-                                    XMLNodePR.SetAttribute('QuantiteEnCommande', Format(RecSaleLine.Quantity, 0, 9));
-                                    XMLNodePR.SetAttribute('PRIXHT', Format(RecSaleLine."Unit Price" * (1 - RecSaleLine."Line Discount %" / 100), 0, 9));
-                                    XMLNodeLDT.Add(XMLNodePR);
-                                until RecSaleLine.Next() = 0;
-                                XMLRoot.Add(XMLNodeLDT);
-                            end;
-                        end else begin
-                            XMLRoot.SetAttribute('Code', '99');
-                            XMLRoot.SetAttribute('TexteDMS', 'Dossier non trouvé');
-                        end;
-                    end else begin
-                        // --- TRAITEMENT SERVICE HEADER ---
-                        RecServiceHeader.Reset();
-                        RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
-                        RecServiceHeader.SetRange("No.", DossierDmsId);
-                        if RecServiceHeader.FindFirst() then begin
-                            Hours := (RecServiceHeader."Order Time" - 000000T) div 3600000;
-                            Minutes := ((RecServiceHeader."Order Time" - 000000T) mod 3600000) div 60000;
-
-                            XMLRoot.SetAttribute('Code', '0');
-                            XMLRoot.SetAttribute('DOSSIER_DMS_ID', RecServiceHeader."No.");
-                            XMLRoot.SetAttribute('ETATDOSSIERDMS', '1');
-                            XMLRoot.SetAttribute('HEURESRDV', Format(Hours));
-                            XMLRoot.SetAttribute('MINUTESRDV', Format(Minutes));
-                            XMLRoot.SetAttribute('TPSIMMO', '');
-
-                            AddClientNode(XMLRoot, RecServiceHeader."Sell-to Customer No.");
-                            AddVehicleNode(XMLRoot, RecServiceHeader.VIN);
-                        end else begin
-                            XMLRoot.SetAttribute('Code', '99');
-                            XMLRoot.SetAttribute('TexteDMS', 'Dossier non trouvé');
-                            XMLRoot.SetAttribute('DOSSIER_DMS_ID', DossierDmsId);
-                        end;
-                    end;
-                end;
-
-            '4':
-                begin
-                    RecServiceHeader.Reset();
-                    RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
-                    if RecServiceHeader.FindSet() then
-                        repeat
-                            Count += 1;
-                            XMLNode := XmlElement.Create('LZRF51_ITEM'); // Utilise un nom différent pour éviter la confusion avec le parent si nécessaire
-                            XMLNode.SetAttribute('Code', '0');
-                            XMLNode.SetAttribute('DOSSIER_DMS_ID', RecServiceHeader."No.");
-                            XMLNode.SetAttribute('ETATDOSSIERDMS', '1');
-                            XMLRoot.Add(XMLNode);
-                        until (RecServiceHeader.Next() = 0) or (Count = 30);
-                end;
-            else begin
-                XMLRoot.SetAttribute('Code', '99');
-                XMLRoot.SetAttribute('TexteDMS', 'Code interrogation inconnu');
-            end;
-        end;
-
-        // 2. AJOUT de LZRF51 à la racine DMS
-        XMLRootDMS.Add(XMLRoot);
-    end;
-
 
     procedure LZRF53T53V1(var XMLRootDMS: XmlElement; XMLNodeReq: XmlElement)
     var
@@ -3073,9 +2271,7 @@ codeunit 75101 "Business Layer"
         XMLRootNode: XmlNode;
         XMLDmsNode: XmlNode;
         DossierDmsId: Text;
-        TypeXX: Text;
     begin
-        TypeXX := 'SBOX';
 
         if not XMLDom.GetRoot(XMLDms) then exit;
 
@@ -3097,7 +2293,7 @@ codeunit 75101 "Business Layer"
             XMLRoot.SetAttribute('Code', '0');
             XMLRoot.SetAttribute('DOSSIER_DMS_ID', RecSalesInvoiceHeader."No.");
             XMLRoot.SetAttribute('TexteDMS', '');
-            XMLRoot.SetAttribute('ETATDOSSIERDMS', '2');
+            XMLRoot.SetAttribute('ETATDOSSIERDMS', '1');
             XMLRoot.SetAttribute('RDV_DMS_ID', '');
             // Initialisation des attributs vides requis par le schéma
             XMLRoot.SetAttribute('ANNEERDV', '');
@@ -3280,67 +2476,6 @@ codeunit 75101 "Business Layer"
         end;
     end;
 
-    procedure LZRC23T09V1(VehiculeDmsId: Text[30]; var XMLRootDMS: XmlElement; RqType: Text[30])
-    var
-        RecVehicle: Record "Vehicle"; // Table 5025400
-        XMLRoot: XmlElement;
-        XMLNode: XmlElement;
-        DateToUse: Date;
-    begin
-        // ⚡ Créer le bloc racine LZRC23 (TempRoot interne)
-        XMLRoot := XmlElement.Create('LZRC23');
-
-        // Recherche du véhicule par VIN
-        RecVehicle.Reset();
-        RecVehicle.SetRange(VIN, VehiculeDmsId);
-
-        if RecVehicle.FindFirst() then begin
-            XMLRoot.SetAttribute('Code', '0');
-            XMLRoot.SetAttribute('TexteDMS', '');
-
-            XMLNode := XmlElement.Create('VEHICULE');
-            XMLNode.SetAttribute('VEHICULE_DMS_ID', RecVehicle.VIN);
-            XMLNode.SetAttribute('LibelleMarque', RecVehicle."Make Code");
-            XMLNode.SetAttribute('LibelleModele', RecVehicle."Model Code");
-
-            // Découpage du VIN
-            XMLNode.SetAttribute('VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
-            XMLNode.SetAttribute('VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
-            XMLNode.SetAttribute('VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
-
-            XMLNode.SetAttribute('Immatriculation', RecVehicle."Registration No.");
-
-            // Date mise en circulation
-            if RecVehicle."First Registration Date" <> 0D then
-                DateToUse := RecVehicle."First Registration Date"
-            else
-                DateToUse := RecVehicle."Creation Date";
-
-            if DateToUse <> 0D then begin
-                XMLNode.SetAttribute('AnneeMiseCirculation', Format(Date2DMY(DateToUse, 3)));
-                XMLNode.SetAttribute('MoisMiseCirculation', Format(Date2DMY(DateToUse, 2)));
-                XMLNode.SetAttribute('JourMiseCirculation', Format(Date2DMY(DateToUse, 1)));
-            end;
-
-            XMLNode.SetAttribute('DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, 9));
-            XMLNode.SetAttribute('CodeOPB', '');
-            XMLNode.SetAttribute('TypeEntretien', '');
-
-            XMLRoot.Add(XMLNode);
-
-            // Appel complémentaire LZRC02T02V1 (T02)
-            if RqType in ['05', '06', '09'] then
-                LZRC02T02V1(RecVehicle.VIN, RecVehicle.VIN, RecVehicle."Registration No.", XMLRoot, RqType);
-
-        end else begin
-            // Véhicule non trouvé
-            XMLRoot.SetAttribute('Code', '99');
-            XMLRoot.SetAttribute('TexteDMS', 'Véhicule introuvable');
-        end;
-
-        // ⚡ Ajout FINAL au parent XMLRootDMS (TempRoot)
-        XMLRootDMS.Add(XMLRoot);
-    end;
 
     local procedure CreateEmptyPRNode(var XMLRoot: XmlElement; ItemRef: Code[20]; CodePR: Text)
     var
@@ -3372,132 +2507,6 @@ codeunit 75101 "Business Layer"
         end;
     end;
 
-    /*
-    procedure LZRF47T24(var XMLDom: XmlDocument; XMLNodeReq: XmlElement; XMLNodeReqType11: XmlElement; XMLNodeReqType22: XmlElement)
-    var
-        XMLDms, XMLRoot, XMLNode, XMLNodePR, XMLNodeMO: XmlElement;
-        XMLNodesLDT, XMLNodesPR11, XMLNodesLDT22, XMLNodesMO22: XmlNodeList;
-        XNodeLDT, XNodePR11, XNodeLDT22, XNodeMO22: XmlNode;
-        RecPackage: Record "Service Package"; // Table 5025610
-        RecPackageVersion: Record "Service Package Version"; // Table 5025615
-        //RecPackageBOM: Record ; // Table 5025611
-        lRecServiceHeader: Record "Service Header"; // Table 5025624
-        lRecServiceLine: Record "Service Line EDMS"; // Table 5025625
-        lRecServiceJobLine: Record "Service Package Version"; // Table 5025627 (Custom)
-        lRecServicePackPrice: Record "Service Package Version Line"; // Table 5025635 (Custom)
-        DMS_ID_Value: Code[20];
-        IDFORFAIT_Value: Code[20];
-        LIGNE_DT_ID: Text;
-        ErrorInFF: Boolean;
-        i, j, k, l: Integer;
-        TypeXX: Text;
-    begin
-        if not XMLDom.GetRoot(XMLDms) then exit;
-        GetOrCreateElement(XMLDms, 'LZRF47', XMLRoot);
-
-        TypeXX := 'PRIXHT'; // À adapter
-        DMS_ID_Value := GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID');
-
-        // --- MODE 1 : LECTURE DEPUIS UN DOSSIER EXISTANT ---
-        if (DMS_ID_Value <> '') and lRecServiceHeader.Get(lRecServiceHeader."Document Type"::Order, DMS_ID_Value) then begin
-            lRecServiceJobLine.SetRange("Document Type", lRecServiceHeader."Document Type");
-            lRecServiceJobLine.SetRange("Document No.", DMS_ID_Value);
-            lRecServiceJobLine.SetFilter("Package No.", '<>%1', '');
-
-            if lRecServiceJobLine.FindSet() then begin
-                repeat
-                    XMLNode := XmlElement.Create('FF');
-                    XMLRoot.Add(XMLNode);
-                    XMLNode.SetAttribute('CODE_FF', '2');
-                    XMLNode.SetAttribute('LIGNE_DT_ID', lRecServiceJobLine."Complaint 2"); // Mapping original
-                    XMLNode.SetAttribute('LIGNE_DT_ID_DMS', Format(lRecServiceJobLine."Line No."));
-                    XMLNode.SetAttribute('IDFORFAIT', lRecServiceJobLine."Package No." + lRecServiceJobLine."SBOX CodeTypeVehicule");
-
-                    // Recherche du prix du forfait dans le dossier
-                    if lRecServicePackPrice.Get(lRecServiceHeader."Document Type"::Order, DMS_ID_Value, 
-                        lRecServiceJobLine."Package No.", lRecServiceJobLine."Package Version No.") then begin
-                        XMLNode.SetAttribute('PrixUnitaireHT', Format(lRecServicePackPrice."Unit Price", 0, '<Precision,2:2><Standard Format,2>'));
-                        XMLNode.SetAttribute('PrixUnitaireTTC', Format(lRecServicePackPrice."Unit Price Incl. VAT", 0, '<Precision,2:2><Standard Format,2>'));
-                    end;
-
-                    // Détails du forfait (PR et MO)
-                    lRecServiceLine.SetRange("Document Type", lRecServiceLine."Document Type"::Order);
-                    lRecServiceLine.SetRange("Document No.", DMS_ID_Value);
-                    lRecServiceLine.SetRange("Package No.", lRecServiceJobLine."Package No.");
-                    if lRecServiceLine.FindSet() then
-                        repeat
-                            case lRecServiceLine.Type of
-                                lRecServiceLine.Type::Item: begin
-                                    XMLNodePR := XmlElement.Create('PR');
-                                    XMLNode.Add(XMLNodePR);
-                                    XMLNodePR.SetAttribute('REFERENCE_PR', lRecServiceLine."No.");
-                                    XMLNodePR.SetAttribute('LIBELLE_PR', lRecServiceLine.Description);
-                                    XMLNodePR.SetAttribute('TYPE_PR', '2');
-                                end;
-                                lRecServiceLine.Type::: begin
-                                    XMLNodeMO := XmlElement.Create('MO');
-                                    XMLNode.Add(XMLNodeMO);
-                                    XMLNodeMO.SetAttribute('CODEOPERATION', lRecServiceLine."No.");
-                                    XMLNodeMO.SetAttribute('TEMPSGLOBAL', Format(lRecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
-                                    XMLNodeMO.SetAttribute('LIBELLEOPERATION', lRecServiceLine.Description);
-                                end;
-                            end;
-                        until lRecServiceLine.Next() = 0;
-                until lRecServiceJobLine.Next() = 0;
-            end;
-        end else begin
-            // --- MODE 2 : CONSULTATION DU CATALOGUE THÉORIQUE ---
-            if not XMLNodeReq.SelectNodes('LDT', XMLNodesLDT) then exit;
-
-            for i := 0 to XMLNodesLDT.Count() - 1 do begin
-                XMLNodesLDT.Get(i, XNodeLDT);
-                IDFORFAIT_Value := GetAttributeValue(XNodeLDT.AsXmlElement().SelectSingleNode('FF').AsXmlElement(), 'IDFORFAIT');
-                LIGNE_DT_ID := GetAttributeValue(XNodeLDT.AsXmlElement().SelectSingleNode('FF').AsXmlElement(), 'LIGNE_DT_ID');
-
-                RecPackage.Reset();
-                if RecPackage.Get(IDFORFAIT_Value) then begin
-                    RecPackageVersion.SetRange("Package No.", IDFORFAIT_Value);
-                    if RecPackageVersion.FindLast() then begin
-                        XMLNode := XmlElement.Create('FF');
-                        XMLRoot.Add(XMLNode);
-                        XMLNode.SetAttribute('CODE_FF', '2');
-                        XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
-                        XMLNode.SetAttribute('PrixUnitaireHT', Format(RecPackageVersion."Unit Price", 0, '<Precision,2:2><Standard Format,2>'));
-
-                        // Lecture de la BOM du forfait
-                        RecPackageBOM.SetRange("Package No.", RecPackageVersion."Package No.");
-                        RecPackageBOM.SetRange("Package Version No.", RecPackageVersion."Package Version");
-                        if RecPackageBOM.FindSet() then
-                            repeat
-                                if RecPackageBOM.Type = RecPackageBOM.Type::Item then begin
-                                    XMLNodePR := XmlElement.Create('PR');
-                                    XMLNode.Add(XMLNodePR);
-                                    XMLNodePR.SetAttribute('REFERENCE_PR', RecPackageBOM."No.");
-                                    XMLNodePR.SetAttribute('QuantiteEnCommande', Format(RecPackageBOM.Quantity));
-                                end else begin
-                                    XMLNodeMO := XmlElement.Create('MO');
-                                    XMLNode.Add(XMLNodeMO);
-                                    XMLNodeMO.SetAttribute('CODEOPERATION', RecPackageBOM."No.");
-                                    XMLNodeMO.SetAttribute('TEMPSGLOBAL', '1');
-                                end;
-                            until RecPackageBOM.Next() = 0;
-                    end;
-                end else
-                    ErrorInFF := true;
-            end;
-        end;
-
-        // Finalisation du statut global
-        if ErrorInFF then begin
-            XMLRoot.SetAttribute('Code', '52');
-            XMLRoot.SetAttribute('TexteDMS', 'forfait inexistant');
-        end else begin
-            XMLRoot.SetAttribute('Code', '0');
-            XMLRoot.SetAttribute('TexteDMS', '');
-        end;
-    end;
-    */
-
     procedure SetNumeroPostePARAMDMS(VNumeroPoste: Text[30]; VPARAMDMS: Text[50])
     var
         lSBOXSetting: Record "STF Servicebox Setup"; // Remplacer par le nom réel de votre table 60209
@@ -3517,15 +2526,13 @@ codeunit 75101 "Business Layer"
 
 
 
-    /// <summary>
-    /// Migration C/AL -> AL : Procédure LZRF51T51
-    /// Récupération d'un dossier DMS
-    /// </summary>
+
+
     procedure LZRF51T51V1(TempRoot: XmlElement; XMLNodeReq: XmlElement)
     var
-        XMLDms: XmlElement;
         XMLRoot: XmlElement;
         XMLNode: XmlElement;
+        XMLNodeVehicule: XmlElement;
         XMLNodeLDT: XmlElement;
         XMLNodeMO: XmlElement;
         XMLNodePR: XmlElement;
@@ -3536,36 +2543,35 @@ codeunit 75101 "Business Layer"
         RecServiceJobLine: Record "Service Order Symptome  EDMS";
         RecServiceHeader: Record "Service Header EDMS";
         RecServiceLine: Record "Service Line EDMS";
+        RecServiceLabor: Record "Service Labor";
         RecVehicle: Record Vehicle;
         RecCustomer: Record Customer;
         RecSaleHeader: Record "Sales Header";
         RecSaleLine: Record "Sales Line";
-        RecSaleLine2: Record "Sales Line";
         Milliseconds: Integer;
         Hours: Integer;
         Minutes: Integer;
         Seconds: Integer;
+        HoursRestit: Integer;
+        MinutesRestit: Integer;
         Count: Integer;
-        TempAttr: XmlAttribute;
         AttrList: XmlAttributeCollection;
     begin
-        // Création du nœud racine LZRF51 et ajout à TempRoot
         XMLRoot := XmlElement.Create('LZRF51');
         TempRoot.Add(XMLRoot);
 
-        // Lecture des attributs de la requête
         AttrList := XMLNodeReq.Attributes();
         AttrList.Get('CODE_INTERROGATION_DMS', CODE_INTERR_DMS_Attribute);
         AttrList.Get('DOSSIER_DMS_ID', DOSSIER_DMS_ID_Attribute);
         AttrList.Get('RDV_DMS_ID', RDV_DMS_ID_Attribute);
 
-
+        // ─────────────────────────────────────────────────────────
+        // CAS 1 — Existence dossier service
+        // ─────────────────────────────────────────────────────────
         if Format(CODE_INTERR_DMS_Attribute.Value()) = '1' then begin
-            // Seule la récupération du dossier
             RecServiceHeader.Reset();
             RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
             RecServiceHeader.SetRange("No.", Format(DOSSIER_DMS_ID_Attribute.Value()));
-
             if RecServiceHeader.FindSet() then begin
                 AddAttribute(XMLRoot, 'Code', '0');
                 AddAttribute(XMLRoot, 'TexteDMS', '');
@@ -3586,25 +2592,50 @@ codeunit 75101 "Business Layer"
                     AddAttribute(XMLRoot, 'HEURESRDV_RESTIT', '');
                     AddAttribute(XMLRoot, 'MINUTESRDV_RESTIT', '');
                     AddAttribute(XMLRoot, 'RETOURATELIER', '');
+                    AddAttribute(XMLRoot, 'RemiseDossier', '');
+                    AddAttribute(XMLRoot, 'MotifRemise', '');
+                    AddAttribute(XMLRoot, 'NUMEROCARTEDEREPERAGE', '');
+                    AddAttribute(XMLRoot, 'MARQUE_RECEP', '');
+                    AddAttribute(XMLRoot, 'SIGNATURE_NUMERIQUE', '');
                 until RecServiceHeader.Next() = 0;
             end else begin
                 AddAttribute(XMLRoot, 'Code', '99');
-                AddAttribute(XMLRoot, 'TexteDMS', 'Dossier non trouvé');
+                AddAttribute(XMLRoot, 'TexteDMS', 'Dossier non trouve');
             end;
+
+            // ─────────────────────────────────────────────────────────
+            // CAS 2 — Header + Client + Vehicule + LDT service
+            // ─────────────────────────────────────────────────────────
         end else if Format(CODE_INTERR_DMS_Attribute.Value()) = '2' then begin
-            // Récupération dossier + client + véhicule + lignes
             RecServiceHeader.Reset();
             RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
             RecServiceHeader.SetRange("No.", Format(DOSSIER_DMS_ID_Attribute.Value()));
-
             if RecServiceHeader.FindSet() then begin
                 AddAttribute(XMLRoot, 'Code', '0');
                 AddAttribute(XMLRoot, 'TexteDMS', '');
                 repeat
                     AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
                     AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '1');
+                    AddAttribute(XMLRoot, 'RDV_DMS_ID', '');
+                    AddAttribute(XMLRoot, 'ANNEERDV', '');
+                    AddAttribute(XMLRoot, 'MOISRDV', '');
+                    AddAttribute(XMLRoot, 'JOURRDV', '');
+                    AddAttribute(XMLRoot, 'HEURESRDV', '');
+                    AddAttribute(XMLRoot, 'MINUTESRDV', '');
+                    AddAttribute(XMLRoot, 'TPSIMMO', '');
+                    AddAttribute(XMLRoot, 'EQUIPE', '');
+                    AddAttribute(XMLRoot, 'ANNEERDV_RESTIT', '');
+                    AddAttribute(XMLRoot, 'MOISRDV_RESTIT', '');
+                    AddAttribute(XMLRoot, 'JOURRDV_RESTIT', '');
+                    AddAttribute(XMLRoot, 'HEURESRDV_RESTIT', '');
+                    AddAttribute(XMLRoot, 'MINUTESRDV_RESTIT', '');
+                    AddAttribute(XMLRoot, 'RETOURATELIER', '');
+                    AddAttribute(XMLRoot, 'RemiseDossier', '');
+                    AddAttribute(XMLRoot, 'MotifRemise', '');
+                    AddAttribute(XMLRoot, 'NUMEROCARTEDEREPERAGE', '');
+                    AddAttribute(XMLRoot, 'MARQUE_RECEP', '');
+                    AddAttribute(XMLRoot, 'SIGNATURE_NUMERIQUE', '');
 
-                    // --- CLIENT ---
                     RecCustomer.Reset();
                     RecCustomer.SetRange("No.", RecServiceHeader."Sell-to Customer No.");
                     if RecCustomer.FindSet() then
@@ -3612,34 +2643,60 @@ codeunit 75101 "Business Layer"
                             AddElement(XMLRoot, 'CLIENT', XMLNode);
                             AddAttribute(XMLNode, 'CLIENT_DMS_ID', RecCustomer."No.");
                             AddAttribute(XMLNode, 'TypeClient', Format(RecCustomer."Partner Type"));
-                            AddAttribute(XMLNode, 'Nom', RecCustomer."Name");
-                            AddAttribute(XMLNode, 'Prenom', RecCustomer."Name 2");
-                            AddAttribute(XMLNode, 'TypeEntreprise', RecCustomer."DLT function code");
+                            AddAttribute(XMLNode, 'Nom', RecCustomer.Name);
+                            AddAttribute(XMLNode, 'Prenom', RecCustomer."Name 2");           // [ADD-2]
+                            AddAttribute(XMLNode, 'PhoneMobile', RecCustomer."Mobile Phone No.");
+                            AddAttribute(XMLNode, 'Email', RecCustomer."E-Mail");            // [ADD-2]
+                            AddAttribute(XMLNode, 'TypeEntreprise', RecCustomer."DLT function code"); // [ADD-2]
                             AddAttribute(XMLNode, 'RaisonSociale', RecCustomer.Name);
                             AddAttribute(XMLNode, 'NumeroVoie', '');
                             AddAttribute(XMLNode, 'TypeVoie', '');
                             AddAttribute(XMLNode, 'Adresse1', RecCustomer.Address);
+                            AddAttribute(XMLNode, 'Adresse2', RecCustomer."Address 2");      // [ADD-2]
+                            AddAttribute(XMLNode, 'Adresse3', '');                           // [ADD-2]
                             AddAttribute(XMLNode, 'Ville', RecCustomer.City);
                             AddAttribute(XMLNode, 'CodePostal', RecCustomer."Post Code");
+                            if RecCustomer.County <> '' then
+                                AddAttribute(XMLNode, 'Pays', RecCustomer.County)
+                            else
+                                AddAttribute(XMLNode, 'Pays', 'TN');                         // [ADD-2]
                             AddAttribute(XMLNode, 'NumeroCompte', RecCustomer."No.");
+                            RecCustomer.CalcFields("Balance (LCY)");
+                            AddAttribute(XMLNode, 'SoldeClient', Format(RecCustomer."Balance (LCY)", 0, '<Precision,2:2><Standard Format,2>'));
+                            AddAttribute(XMLNode, 'PhoneDomicile', '');                      // [ADD-2]
+                            AddAttribute(XMLNode, 'PhoneBureau', RecCustomer."Phone No.");   // [ADD-2]
+                            AddAttribute(XMLNode, 'NumeroPoste', '');                        // [ADD-2]
+                            AddAttribute(XMLNode, 'Fax', RecCustomer."Fax No.");             // [ADD-2]
+                            AddAttribute(XMLNode, 'TEXTE_LIBRE', '');                        // [ADD-2]
+                            AddAttribute(XMLNode, 'Observations', '');                       // [ADD-2]
                         until RecCustomer.Next() = 0;
 
-                    // --- VEHICULE ---
                     RecVehicle.Reset();
                     RecVehicle.SetRange(VIN, RecServiceHeader.VIN);
                     if RecVehicle.FindSet() then
                         repeat
-                            AddElement(XMLRoot, 'VEHICULE', XMLNode);
-                            AddAttribute(XMLNode, 'VEHICULE_DMS_ID', RecVehicle.VIN);
-                            AddAttribute(XMLNode, 'VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
-                            AddAttribute(XMLNode, 'VIN_VDS', CopyStr(RecVehicle.VIN, 4, 2));
-                            AddAttribute(XMLNode, 'VIN_VIS', CopyStr(RecVehicle.VIN, 6, 3));
-                            AddAttribute(XMLNode, 'Immatriculation', RecVehicle."Registration No.");
-                            AddAttribute(XMLNode, 'LibelleMarque', RecVehicle."Make Code");
-                            AddAttribute(XMLNode, 'LibelleModele', RecVehicle."Model Code");
+                            AddElement(XMLRoot, 'VEHICULE', XMLNodeVehicule);
+                            AddAttribute(XMLNodeVehicule, 'VEHICULE_DMS_ID', RecVehicle.VIN);
+                            AddAttribute(XMLNodeVehicule, 'LibelleMarque', RecVehicle."Make Code");
+                            AddAttribute(XMLNodeVehicule, 'LibelleModele', RecVehicle."Model Code");
+                            AddAttribute(XMLNodeVehicule, 'VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
+                            AddAttribute(XMLNodeVehicule, 'VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
+                            AddAttribute(XMLNodeVehicule, 'VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
+                            AddAttribute(XMLNodeVehicule, 'Immatriculation', RecVehicle."Registration No.");
+                            if RecVehicle."First Registration Date" <> 0D then begin        // [ADD-3]
+                                AddAttribute(XMLNodeVehicule, 'AnneeMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 3)));
+                                AddAttribute(XMLNodeVehicule, 'MoisMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 2)));
+                                AddAttribute(XMLNodeVehicule, 'JourMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 1)));
+                            end else begin
+                                AddAttribute(XMLNodeVehicule, 'AnneeMiseCirculation', '');
+                                AddAttribute(XMLNodeVehicule, 'MoisMiseCirculation', '');
+                                AddAttribute(XMLNodeVehicule, 'JourMiseCirculation', '');
+                            end;
+                            AddAttribute(XMLNodeVehicule, 'DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, '<Standard Format,2>'));
+                            AddAttribute(XMLNodeVehicule, 'CodeOPB', '');                    // [ADD-3]
+                            AddAttribute(XMLNodeVehicule, 'TypeEntretien', '');              // [ADD-3]
                         until RecVehicle.Next() = 0;
 
-                    // --- LDT / PR ---
                     TYPEFORFAIT := 'Labor';
                     RecServiceLine.Reset();
                     RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
@@ -3655,420 +2712,477 @@ codeunit 75101 "Business Layer"
                             AddAttribute(XMLNodeLDT, 'REMISE', Format(RecServiceLine."Line Discount %"));
                             AddAttribute(XMLNodeLDT, 'ReferenceFF', Format(RecServiceLine."No."));
                         until RecServiceLine.Next() = 0;
-
                 until RecServiceHeader.Next() = 0;
             end else begin
                 AddAttribute(XMLRoot, 'Code', '99');
-                AddAttribute(XMLRoot, 'TexteDMS', 'Dossier non trouvé');
+                AddAttribute(XMLRoot, 'TexteDMS', 'Dossier non trouve');
             end;
 
+            // ─────────────────────────────────────────────────────────
+            // CAS 3 — Détail complet dossier
+            // ─────────────────────────────────────────────────────────
         end else if Format(CODE_INTERR_DMS_Attribute.Value()) = '3' then begin
+
             if StrPos(Format(DOSSIER_DMS_ID_Attribute.Value()), 'F') = 1 then
-                LZRF51T51FV1(XMLRoot, XMLNodeReq, Format(DOSSIER_DMS_ID_Attribute.Value()));
-            // Commande de vente (CVP)
-            RecSaleHeader.Reset();
-            RecSaleHeader.SetRange("Document Type", RecSaleHeader."Document Type"::Order);
-            RecSaleHeader.SetRange("No.", Format(DOSSIER_DMS_ID_Attribute.Value()));
-            if RecSaleHeader.FindFirst() then begin
-                AddAttribute(XMLRoot, 'Code', '0');
-                AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecSaleHeader."No.");
-                AddAttribute(XMLRoot, 'TexteDMS', '');
+                LZRF51T51FV1(XMLRoot, XMLNodeReq, Format(DOSSIER_DMS_ID_Attribute.Value()))
 
-                /*  if RecSaleHeader.Status < RecSaleHeader.Status::"Partly Invoiced" then
-                     AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '1')
-                 else */
-                AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '2');
+            // ── Commande de vente PR (préfixe CV) ────────────────
+            else if StrPos(Format(DOSSIER_DMS_ID_Attribute.Value()), 'CV') = 1 then begin
+                RecSaleHeader.Reset();
+                RecSaleHeader.SetRange("Document Type", RecSaleHeader."Document Type"::Order);
+                RecSaleHeader.SetRange("No.", Format(DOSSIER_DMS_ID_Attribute.Value()));
+                if RecSaleHeader.FindFirst() then begin
 
-                AddAttribute(XMLRoot, 'RDV_DMS_ID', RecSaleHeader."No.");
-                AddAttribute(XMLRoot, 'ANNEERDV', Format(Date2DMY(RecSaleHeader."Order Date", 3)));
-                AddAttribute(XMLRoot, 'MOISRDV', Format(Date2DMY(RecSaleHeader."Order Date", 2)));
-                AddAttribute(XMLRoot, 'JOURRDV', Format(Date2DMY(RecSaleHeader."Order Date", 1)));
-                AddAttribute(XMLRoot, 'HEURESRDV', '');
-                AddAttribute(XMLRoot, 'MINUTESRDV', '');
-                AddAttribute(XMLRoot, 'EQUIPE', '');
-                AddAttribute(XMLRoot, 'RETOURATELIER', '');
+                    // LZRF51
+                    AddAttribute(XMLRoot, 'Code', '0');
+                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecSaleHeader."No.");
+                    AddAttribute(XMLRoot, 'TexteDMS', '');
+                    /*  if RecSaleHeader.Status < RecSaleHeader.Status::"Partly Invoiced" then
+                         AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '1')
+                     else */
+                    AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '1');
+                    AddAttribute(XMLRoot, 'RDV_DMS_ID', RecSaleHeader."No.");
+                    AddAttribute(XMLRoot, 'ANNEERDV', Format(Date2DMY(RecSaleHeader."Order Date", 3)));
+                    AddAttribute(XMLRoot, 'MOISRDV', Format(Date2DMY(RecSaleHeader."Order Date", 2)));
+                    AddAttribute(XMLRoot, 'JOURRDV', Format(Date2DMY(RecSaleHeader."Order Date", 1)));
+                    AddAttribute(XMLRoot, 'HEURESRDV', '');
+                    AddAttribute(XMLRoot, 'MINUTESRDV', '');
+                    AddAttribute(XMLRoot, 'EQUIPE', '');
+                    AddAttribute(XMLRoot, 'RETOURATELIER', '');
 
-                // Client
-                RecCustomer.Reset();
-                RecCustomer.SetRange("No.", RecSaleHeader."Sell-to Customer No.");
-                if RecCustomer.FindFirst() then begin
-                    AddElement(XMLRoot, 'CLIENT', XMLNode);
-                    AddAttribute(XMLNode, 'CLIENT_DMS_ID', RecCustomer."No.");
-                    AddAttribute(XMLNode, 'TypeClient', Format(RecCustomer."Partner Type"));
-                    AddAttribute(XMLNode, 'Nom', RecCustomer."Name");
-                    AddAttribute(XMLNode, 'Prenom', RecCustomer."Name 2");
-                    AddAttribute(XMLNode, 'PhoneMobile', RecCustomer."Mobile Phone No.");
-                    AddAttribute(XMLNode, 'Email', RecCustomer."E-Mail");
-                    AddAttribute(XMLNode, 'TypeEntreprise', RecCustomer."DLT function code");
-                    AddAttribute(XMLNode, 'RaisonSociale', RecCustomer.Name);
-                    AddAttribute(XMLNode, 'NumeroVoie', '');
-                    AddAttribute(XMLNode, 'TypeVoie', '');
-                    AddAttribute(XMLNode, 'Adresse1', RecCustomer.Address);
-                    AddAttribute(XMLNode, 'Adresse2', RecCustomer."Address 2");
-                    AddAttribute(XMLNode, 'Ville', RecCustomer.City);
-                    AddAttribute(XMLNode, 'CodePostal', RecCustomer."Post Code");
-                    if RecCustomer.County <> '' then
-                        AddAttribute(XMLNode, 'Pays', RecCustomer.County)
-                    else
-                        AddAttribute(XMLNode, 'Pays', '');
-                    AddAttribute(XMLNode, 'NumeroCompte', RecCustomer."No.");
-                    AddAttribute(XMLNode, 'SoldeClient', Format(RecCustomer."Balance (LCY)", 0, '<Precision,2:2><Standard Format,2>'));
-                    AddAttribute(XMLNode, 'PhoneDomicile', '');
-                    AddAttribute(XMLNode, 'PhoneBureau', RecCustomer."Phone No.");
-                    AddAttribute(XMLNode, 'NumeroPoste', '');
-                    AddAttribute(XMLNode, 'Fax', RecCustomer."Fax No.");
-                    AddAttribute(XMLNode, 'TEXTE_LIBRE', '');
-                    AddAttribute(XMLNode, 'Observations', '');
-                end;
-
-                // Véhicule
-                RecVehicle.Reset();
-                RecVehicle.SetRange(VIN, RecSaleHeader."VIN SBOX");
-                if RecVehicle.FindFirst() then begin
-                    AddElement(XMLRoot, 'VEHICULE', XMLNode);
-                    AddAttribute(XMLNode, 'VEHICULE_DMS_ID', RecVehicle.VIN);
-                    AddAttribute(XMLNode, 'LibelleMarque', RecVehicle."Make Code");
-                    AddAttribute(XMLNode, 'LibelleModele', RecVehicle."Model Code");
-                    AddAttribute(XMLNode, 'VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
-                    AddAttribute(XMLNode, 'VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
-                    AddAttribute(XMLNode, 'VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
-                    AddAttribute(XMLNode, 'Immatriculation', RecVehicle."Registration No.");
-                    if RecVehicle."First Registration Date" <> 0D then begin
-                        AddAttribute(XMLNode, 'AnneeMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 3)));
-                        AddAttribute(XMLNode, 'MoisMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 2)));
-                        AddAttribute(XMLNode, 'JourMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 1)));
+                    // CLIENT
+                    RecCustomer.Reset();
+                    RecCustomer.SetRange("No.", RecSaleHeader."Sell-to Customer No.");
+                    if RecCustomer.FindFirst() then begin
+                        AddElement(XMLRoot, 'CLIENT', XMLNode);
+                        AddAttribute(XMLNode, 'CLIENT_DMS_ID', RecCustomer."No.");
+                        AddAttribute(XMLNode, 'TypeClient', Format(RecCustomer."Partner Type"));
+                        AddAttribute(XMLNode, 'Nom', RecCustomer.Name);
+                        AddAttribute(XMLNode, 'Prenom', RecCustomer."Name 2");
+                        AddAttribute(XMLNode, 'PhoneMobile', RecCustomer."Mobile Phone No.");
+                        AddAttribute(XMLNode, 'Email', RecCustomer."E-Mail");
+                        AddAttribute(XMLNode, 'TypeEntreprise', RecCustomer."DLT function code");
+                        AddAttribute(XMLNode, 'RaisonSociale', RecCustomer.Name);
+                        AddAttribute(XMLNode, 'NumeroVoie', '');
+                        AddAttribute(XMLNode, 'TypeVoie', '');
+                        AddAttribute(XMLNode, 'Adresse1', RecCustomer.Address);
+                        AddAttribute(XMLNode, 'Adresse2', RecCustomer."Address 2");
+                        AddAttribute(XMLNode, 'Ville', RecCustomer.City);
+                        AddAttribute(XMLNode, 'CodePostal', RecCustomer."Post Code");
+                        if RecCustomer.County <> '' then
+                            AddAttribute(XMLNode, 'Pays', RecCustomer.County)
+                        else
+                            AddAttribute(XMLNode, 'Pays', '');
+                        AddAttribute(XMLNode, 'NumeroCompte', RecCustomer."No.");
+                        RecCustomer.CalcFields("Balance (LCY)");
+                        AddAttribute(XMLNode, 'SoldeClient', Format(RecCustomer."Balance (LCY)", 0, '<Precision,2:2><Standard Format,2>'));
+                        AddAttribute(XMLNode, 'PhoneDomicile', '');
+                        AddAttribute(XMLNode, 'PhoneBureau', RecCustomer."Phone No.");
+                        AddAttribute(XMLNode, 'NumeroPoste', '');
+                        AddAttribute(XMLNode, 'Fax', RecCustomer."Fax No.");
+                        AddAttribute(XMLNode, 'TEXTE_LIBRE', '');
+                        AddAttribute(XMLNode, 'Observations', '');
                     end;
-                    AddAttribute(XMLNode, 'DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, '<Standard Format,2>'));
-                    AddAttribute(XMLNode, 'CodeOPB', '');
-                    AddAttribute(XMLNode, 'TypeEntretien', '');
-                end;
 
-                // Lignes de vente (PR)
-                RecSaleLine.SetRange("Document Type", RecSaleLine."Document Type"::Order);
-                RecSaleLine.SetRange("Document No.", RecSaleHeader."No.");
-                if RecSaleLine.FindSet() then begin
-                    AddElement(XMLNode, 'LDT', XMLNodeLDT);
-                    AddAttribute(XMLNodeLDT, TypeXX + '_LDT', '1');
-                    AddAttribute(XMLNodeLDT, 'CODEIMPUTATION_LDT', RecSaleHeader."Sell-to Customer No.");
-                    AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', RecSaleLine."Line LDT");
-                    repeat
-                        AddElement(XMLNodeLDT, 'PR', XMLNodePR);
-                        AddAttribute(XMLNodePR, 'LIGNE_DT_ID', RecSaleLine."Line LDT");
-                        AddAttribute(XMLNodePR, 'LIGNE_DT_ID_DMS', Format(RecSaleLine."Line No."));
-                        AddAttribute(XMLNodePR, TypeXX + '_PR', '');
-                        AddAttribute(XMLNodePR, 'CODEIMPUTATION_PR', RecSaleHeader."Bill-to Customer No.");
-                        AddAttribute(XMLNodePR, 'REFERENCE_PR', SetItemNo(RecSaleLine."No."));
-                        AddAttribute(XMLNodePR, 'LIBELLE_PR', RecSaleLine.Description);
-                        AddAttribute(XMLNodePR, 'TYPE_PR', '2');
-                        AddAttribute(XMLNodePR, 'QuantiteEnCommande',
-                            Format(RecSaleLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
-                        AddAttribute(XMLNodePR, 'QuantiteServie',
-                            Format(RecSaleLine."Quantity Shipped", 0, '<Precision,2:2><Standard Format,2>'));
-                        AddAttribute(XMLNodePR, 'PRIXHT',
-                            Format(RecSaleLine."Unit Price" * (1 - RecSaleLine2."Line Discount %" / 100),
-                                0, '<Precision,2:2><Standard Format,2>'));
-                        AddAttribute(XMLNodePR, 'PRIXTTC',
-                            Format(RecSaleLine."Unit Price" * (1 - RecSaleLine2."Line Discount %" / 100)
-                                * (1 + RecSaleLine."VAT %" / 100), 0, '<Precision,2:2><Standard Format,2>'));
-                    until RecSaleLine.Next() = 0;
-                end;
-            end else begin
-                AddAttribute(XMLRoot, 'Code', '99');
-                AddAttribute(XMLRoot, 'TexteDMS', 'Dossier non trouvé');
-            end;
-        end else begin
-            // APV - Ordre de réparation
-            RecServiceHeader.Reset();
-            RecServiceHeader.SetFilter("Document Type", '%1', RecServiceHeader."Document Type"::Order);
-            RecServiceHeader.SetFilter("No.", Format(DOSSIER_DMS_ID_Attribute.Value()));
-            if RecServiceHeader.FindFirst() then begin
-                // Calcul heure de prise en charge
-                /*  Milliseconds := RecServiceHeader."Time of Order" - 000000T;
-                 Hours := Milliseconds div 1000 div 60 div 60;
-                 Milliseconds -= Hours * 1000 * 60 * 60;
-                 Minutes := Milliseconds div 1000 div 60;
-                 Milliseconds -= Minutes * 1000 * 60;
-                 Seconds := Milliseconds div 1000;
-*/
-                AddAttribute(XMLRoot, 'Code', '0');
-                AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
-                AddAttribute(XMLRoot, 'TexteDMS', '');
+                    // VEHICULE — XMLNodeVehicule dédié [FIX-4]
+                    RecVehicle.Reset();
+                    RecVehicle.SetRange(VIN, RecSaleHeader."VIN SBOX");
+                    if RecVehicle.FindFirst() then begin
+                        AddElement(XMLRoot, 'VEHICULE', XMLNodeVehicule);
+                        AddAttribute(XMLNodeVehicule, 'VEHICULE_DMS_ID', RecVehicle.VIN);
+                        AddAttribute(XMLNodeVehicule, 'LibelleMarque', RecVehicle."Make Code");
+                        AddAttribute(XMLNodeVehicule, 'LibelleModele', RecVehicle."Model Code");
+                        AddAttribute(XMLNodeVehicule, 'VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
+                        AddAttribute(XMLNodeVehicule, 'VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
+                        AddAttribute(XMLNodeVehicule, 'VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
+                        AddAttribute(XMLNodeVehicule, 'Immatriculation', RecVehicle."Registration No.");
+                        if RecVehicle."First Registration Date" <> 0D then begin
+                            AddAttribute(XMLNodeVehicule, 'AnneeMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 3)));
+                            AddAttribute(XMLNodeVehicule, 'MoisMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 2)));
+                            AddAttribute(XMLNodeVehicule, 'JourMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 1)));
+                        end;
+                        AddAttribute(XMLNodeVehicule, 'DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, '<Standard Format,2>'));
+                        AddAttribute(XMLNodeVehicule, 'CodeOPB', '');
+                        AddAttribute(XMLNodeVehicule, 'TypeEntretien', '');
 
-                /*  if RecServiceHeader.Status < RecServiceHeader.Status::"Partly Invoiced" then
-                     AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '1')
-                 else */
-                AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '2');
-
-                AddAttribute(XMLRoot, 'RDV_DMS_ID', RecServiceHeader."No.");
-                AddAttribute(XMLRoot, 'ANNEERDV', Format(Date2DMY(RecServiceHeader."Order Date", 3)));
-                AddAttribute(XMLRoot, 'MOISRDV', Format(Date2DMY(RecServiceHeader."Order Date", 2)));
-                AddAttribute(XMLRoot, 'JOURRDV', Format(Date2DMY(RecServiceHeader."Order Date", 1)));
-                AddAttribute(XMLRoot, 'HEURESRDV', Format(Hours));
-                AddAttribute(XMLRoot, 'MINUTESRDV', Format(Minutes));
-
-                // Calcul heure de restitution
-                /*  if RecServiceHeader."Pickup Time" <> 0T then begin
-                     Milliseconds := RecServiceHeader."Pickup Time" - 000000T;
-                     Hours := Milliseconds div 1000 div 60 div 60;
-                     Milliseconds -= Hours * 1000 * 60 * 60;
-                     Minutes := Milliseconds div 1000 div 60;
-                     Milliseconds -= Minutes * 1000 * 60;
-                     Seconds := Milliseconds div 1000;
-                 end; */
-
-                AddAttribute(XMLRoot, 'TPSIMMO', '');//Format(RecServiceHeader.TPSIMMO));
-                AddAttribute(XMLRoot, 'EQUIPE', '');
-
-                /*                  if RecServiceHeader."Pickup Date" <> 0D then begin
-                                     AddAttribute(XMLRoot, 'ANNEERDV_RESTIT', Format(Date2DMY(RecServiceHeader."Pickup Date", 3)));
-                                     AddAttribute(XMLRoot, 'MOISRDV_RESTIT', Format(Date2DMY(RecServiceHeader."Pickup Date", 2)));
-                                     AddAttribute(XMLRoot, 'JOURRDV_RESTIT', Format(Date2DMY(RecServiceHeader."Pickup Date", 1)));
-                                 end;
-
-                                 AddAttribute(XMLRoot, 'HEURESRDV_RESTIT', Format(Hours));
-                                 AddAttribute(XMLRoot, 'MINUTESRDV_RESTIT', Format(Minutes));
-                                 AddAttribute(XMLRoot, 'RETOURATELIER', ''); */
-
-                // Client
-                RecCustomer.Reset();
-                RecCustomer.SetFilter("No.", '%1', RecServiceHeader."Sell-to Customer No.");
-                if RecCustomer.FindFirst() then begin
-                    AddElement(XMLRoot, 'CLIENT', XMLNode);
-                    AddAttribute(XMLNode, 'CLIENT_DMS_ID', RecCustomer."No.");
-                    AddAttribute(XMLNode, 'TypeClient', Format(RecCustomer."Partner Type"));
-                    AddAttribute(XMLNode, 'Nom', RecCustomer."Name");
-                    AddAttribute(XMLNode, 'Prenom', RecCustomer."Name 2");
-                    AddAttribute(XMLNode, 'PhoneMobile', RecCustomer."Mobile Phone No.");
-                    AddAttribute(XMLNode, 'Email', RecCustomer."E-Mail");
-                    AddAttribute(XMLNode, 'TypeEntreprise', RecCustomer."DLT function code");
-                    AddAttribute(XMLNode, 'RaisonSociale', RecCustomer.Name);
-                    AddAttribute(XMLNode, 'NumeroVoie', '');
-                    AddAttribute(XMLNode, 'TypeVoie', '');
-                    AddAttribute(XMLNode, 'Adresse1', RecCustomer.Address);
-                    AddAttribute(XMLNode, 'Adresse2', RecCustomer."Address 2");
-                    AddAttribute(XMLNode, 'Ville', RecCustomer.City);
-                    AddAttribute(XMLNode, 'CodePostal', RecCustomer."Post Code");
-                    if RecCustomer.County <> '' then
-                        AddAttribute(XMLNode, 'Pays', RecCustomer.County)
-                    else
-                        AddAttribute(XMLNode, 'Pays', 'TN');
-                    AddAttribute(XMLNode, 'NumeroCompte', RecCustomer."No.");
-                    RecCustomer.CalcFields("Balance (LCY)");
-                    AddAttribute(XMLNode, 'SoldeClient', Format(RecCustomer."Balance (LCY)", 0, '<Precision,2:2><Standard Format,2>'));
-                    AddAttribute(XMLNode, 'PhoneDomicile', '');
-                    AddAttribute(XMLNode, 'PhoneBureau', RecCustomer."Phone No.");
-                    AddAttribute(XMLNode, 'NumeroPoste', '');
-                    AddAttribute(XMLNode, 'Fax', RecCustomer."Fax No.");
-                    AddAttribute(XMLNode, 'TEXTE_LIBRE', '');
-                    AddAttribute(XMLNode, 'Observations', '');
-                end;
-
-                // Véhicule
-                RecVehicle.Reset();
-                RecVehicle.SetFilter(VIN, '%1', RecServiceHeader.VIN);
-                if RecVehicle.FindFirst() then begin
-                    AddElement(XMLRoot, 'VEHICULE', XMLNode);
-                    AddAttribute(XMLNode, 'VEHICULE_DMS_ID', RecVehicle.VIN);
-                    AddAttribute(XMLNode, 'LibelleMarque', RecVehicle."Make Code");
-                    AddAttribute(XMLNode, 'LibelleModele', RecVehicle."Model Code");
-                    AddAttribute(XMLNode, 'VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
-                    AddAttribute(XMLNode, 'VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
-                    AddAttribute(XMLNode, 'VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
-                    AddAttribute(XMLNode, 'Immatriculation', RecVehicle."Registration No.");
-                    if RecVehicle."First Registration Date" <> 0D then begin
-                        AddAttribute(XMLNode, 'AnneeMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 3)));
-                        AddAttribute(XMLNode, 'MoisMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 2)));
-                        AddAttribute(XMLNode, 'JourMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 1)));
-                    end;
-                    AddAttribute(XMLNode, 'DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, '<Standard Format,2>'));
-                    AddAttribute(XMLNode, 'CodeOPB', '');
-                    AddAttribute(XMLNode, 'TypeEntretien', '');
-
-                    // Lignes de travaux (Job Lines)
-                    RecServiceJobLine.Reset();
-                    RecServiceJobLine.SetFilter("Document Type", '%1', RecServiceHeader."Document Type");
-                    RecServiceJobLine.SetFilter("Document No.", '%1', RecServiceHeader."No.");
-                    if RecServiceJobLine.FindFirst() then
-                        repeat
-                            AddElement(XMLNode, 'LDT', XMLNodeLDT);
-                            AddAttribute(XMLNodeLDT, TypeXX + '_LDT',
-                                Format(CheckTypeImputationByCustomer(RecServiceJobLine."Bill-to Customer No.")));
-                            AddAttribute(XMLNodeLDT, 'CODEIMPUTATION_LDT', RecServiceJobLine."Bill-to Customer No.");
-                            AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', RecServiceJobLine."Instruction Description");
-                            AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
-
-                            if RecServiceJobLine."Package No." <> '' then
-                                AddAttribute(XMLNodeLDT, 'ReferenceFF', RecServiceJobLine."Package No.")
-                            else
-                                AddAttribute(XMLNodeLDT, 'ReferenceFF', '');
-
-                            if RecServiceJobLine."Instruction Description" <> '' then
-                                AddAttribute(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL', RecServiceJobLine."Instruction Description")
-                            else
-                                AddAttribute(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL', 'Vide');
-
-                            AddAttribute(XMLNodeLDT, 'COMMENTAIRES_LDT', '');
-                            AddAttribute(XMLNodeLDT, 'ACCORD_CLIENT', '');
-
-                            /*   if RecServiceJobLine."Package No." <> '' then begin
-                                  if RecServiceJobLine."Type Forfait" = RecServiceJobLine."Type Forfait"::SBOX then
-                                      AddAttribute(XMLNodeLDT, 'TYPEFORFAIT', '1')
-                                  else
-                                      AddAttribute(XMLNodeLDT, 'TYPEFORFAIT', '2');
-                              end else  */
-                            AddAttribute(XMLNodeLDT, 'TYPEFORFAIT', '');
-
-                            // Lignes de service (MO + Pièces)
-                            RecServiceLine.Reset();
-                            RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
-                            RecServiceLine.SetRange("Document No.", RecServiceHeader."No.");
-                            //RecServiceLine.SetRange("Service Job No.", RecServiceJobLine."Task No.");
-                            if RecServiceLine.FindFirst() then
-                                repeat
-                                    if RecServiceLine.Type = RecServiceLine.Type::Labor then begin
-                                        // Main d'œuvre
-                                        AddElement(XMLNodeLDT, 'MO', XMLNodeMO);
-                                        AddAttribute(XMLNodeMO, 'LIGNE_DT_ID', RecServiceJobLine."Instruction Code");
-                                        AddAttribute(XMLNodeMO, 'LIGNE_DT_ID_DMS', Format(RecServiceLine."Line No."));
-                                        AddAttribute(XMLNodeMO, TypeXX + '_MO', '');
-                                        AddAttribute(XMLNodeMO, 'CODEIMPUTATION_MO', RecServiceLine."Bill-to Customer No.");
-                                        /* if RecServiceLine."SBOX MO" <> '' then
-                                            AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."SBOX MO")
-                                        else */
-                                        AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."No.");
-                                        AddAttribute(XMLNodeMO, 'TYPEOPERATION', '2');
-                                        AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE', '');
-                                        AddAttribute(XMLNodeMO, 'TEMPSGLOBAL',
-                                            Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
-                                        AddAttribute(XMLNodeMO, 'TECHNICITE', '1');
-                                        AddAttribute(XMLNodeMO, 'METIER', 'T');
-                                        AddAttribute(XMLNodeMO, 'LIBELLEOPERATION', RecServiceLine.Description);
-                                        AddAttribute(XMLNodeMO, 'PRIXHT_MO',
-                                            Format(RecServiceLine.Amount, 0, '<Precision,2:2><Standard Format,2>'));
-                                        AddAttribute(XMLNodeMO, 'PRIXTTC_MO',
-                                            Format(RecServiceLine."Amount Including VAT", 0, '<Precision,2:2><Standard Format,2>'));
-                                        AddAttribute(XMLNodeMO, 'CODEVENTILATION', '');
-                                        AddAttribute(XMLNodeMO, 'QUANTITE',
-                                            Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
-                                    end;
-
-                                    if RecServiceLine.Type = RecServiceLine.Type::Item then begin
-                                        // Pièce de rechange
-                                        AddElement(XMLNodeLDT, 'PR', XMLNodePR);
-                                        AddAttribute(XMLNodePR, 'LIGNE_DT_ID', RecServiceJobLine."Instruction Code");
-                                        AddAttribute(XMLNodePR, 'LIGNE_DT_ID_DMS', Format(RecServiceLine."Line No."));
-                                        AddAttribute(XMLNodePR, TypeXX + '_PR', '');
-                                        AddAttribute(XMLNodePR, 'CODEIMPUTATION_PR', RecServiceLine."Bill-to Customer No.");
-                                        AddAttribute(XMLNodePR, 'REFERENCE_PR', SetItemNo(RecServiceLine."No."));
-                                        AddAttribute(XMLNodePR, 'LIBELLE_PR', RecServiceLine.Description);
-                                        AddAttribute(XMLNodePR, 'TYPE_PR', '2');
-                                        AddAttribute(XMLNodePR, 'QuantiteEnCommande',
-                                            Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
-                                        AddAttribute(XMLNodePR, 'QuantiteServie',
-                                            Format(RecServiceLine."Quantity Consumed", 0, '<Precision,2:2><Standard Format,2>'));
-                                        AddAttribute(XMLNodePR, 'PRIXHT',
-                                            Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100),
-                                                0, '<Precision,2:2><Standard Format,2>'));
-                                        AddAttribute(XMLNodePR, 'PRIXTTC',
-                                            Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100)
-                                                * (1 + RecServiceLine."VAT %" / 100),
-                                                0, '<Precision,2:2><Standard Format,2>'));
-                                    end;
-                                until RecServiceLine.Next() = 0;
-                        until RecServiceJobLine.Next() = 0;
-
-                    // Lignes non affectées à un Job (Service Job No. = 0)
-                    AddElement(XMLNode, 'LDT', XMLNodeLDT);
-                    AddAttribute(XMLNodeLDT, TypeXX + '_LDT',
-                        Format(CheckTypeImputationByCustomer(RecServiceLine."Bill-to Customer No.")));
-                    AddAttribute(XMLNodeLDT, 'CODEIMPUTATION_LDT', RecServiceLine."Bill-to Customer No.");
-                    AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', '');
-                    AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID_DMS', '');
-                    AddAttribute(XMLNodeLDT, 'ReferenceFF', '');
-                    AddAttribute(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL', 'A Classer');
-                    AddAttribute(XMLNodeLDT, 'COMMENTAIRES_LDT', '');
-                    AddAttribute(XMLNodeLDT, 'ACCORD_CLIENT', '');
-
-                    RecServiceLine.Reset();
-                    RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
-                    RecServiceLine.SetRange("Document No.", RecServiceHeader."No.");
-                    // RecServiceLine.SetFilter("Service Job No.", '%1', 0);
-                    if RecServiceLine.FindFirst() then
-                        repeat
-                            if RecServiceLine.Type = RecServiceLine.Type::Labor then begin
-                                AddElement(XMLNodeLDT, 'MO', XMLNodeMO);
-                                AddAttribute(XMLNodeMO, 'LIGNE_DT_ID', '');
-                                AddAttribute(XMLNodeMO, 'LIGNE_DT_ID_DMS', '');
-                                AddAttribute(XMLNodeMO, TypeXX + '_MO',
-                                    Format(CheckTypeImputationByCustomer(RecServiceLine."Bill-to Customer No.")));
-                                AddAttribute(XMLNodeMO, 'CODEIMPUTATION_MO', RecServiceLine."Bill-to Customer No.");
-                                AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."No.");
-                                AddAttribute(XMLNodeMO, 'TYPEOPERATION', '');
-                                AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE', '');
-                                AddAttribute(XMLNodeMO, 'TEMPSGLOBAL',
-                                    Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
-                                AddAttribute(XMLNodeMO, 'TECHNICITE', '1');
-                                AddAttribute(XMLNodeMO, 'METIER', 'T');
-                                AddAttribute(XMLNodeMO, 'LIBELLEOPERATION', RecServiceLine.Description);
-                                AddAttribute(XMLNodeMO, 'PRIXHT_MO',
-                                    Format(RecServiceLine.Amount, 0, '<Precision,2:2><Standard Format,2>'));
-                                AddAttribute(XMLNodeMO, 'PRIXTTC_MO',
-                                    Format(RecServiceLine."Amount Including VAT", 0, '<Precision,2:2><Standard Format,2>'));
-                                AddAttribute(XMLNodeMO, 'CODEVENTILATION', '');
-                                AddAttribute(XMLNodeMO, 'QUANTITE',
-                                    Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
-                            end;
-
-                            if RecServiceLine.Type = RecServiceLine.Type::Item then begin
+                        // LDT enfant de VEHICULE [FIX-6]
+                        RecSaleLine.Reset();
+                        RecSaleLine.SetRange("Document Type", RecSaleLine."Document Type"::Order);
+                        RecSaleLine.SetRange("Document No.", RecSaleHeader."No.");
+                        if RecSaleLine.FindSet() then begin
+                            AddElement(XMLNodeVehicule, 'LDT', XMLNodeLDT);  // LDT enfant de VEHICULE ✅
+                            AddAttribute(XMLNodeLDT, TypeXX + '_LDT', '1');
+                            AddAttribute(XMLNodeLDT, 'CODEIMPUTATION_LDT', RecSaleHeader."Sell-to Customer No.");
+                            AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', RecSaleLine."Line LDT");
+                            repeat
                                 AddElement(XMLNodeLDT, 'PR', XMLNodePR);
-                                AddAttribute(XMLNodePR, 'LIGNE_DT_ID', '');
-                                AddAttribute(XMLNodePR, 'LIGNE_DT_ID_DMS', '');
+                                AddAttribute(XMLNodePR, 'LIGNE_DT_ID', RecSaleLine."Line LDT");
+                                AddAttribute(XMLNodePR, 'LIGNE_DT_ID_DMS', Format(RecSaleLine."Line No."));
                                 AddAttribute(XMLNodePR, TypeXX + '_PR', '');
-                                AddAttribute(XMLNodePR, 'CODEIMPUTATION_PR', RecServiceLine."Bill-to Customer No.");
-                                AddAttribute(XMLNodePR, 'REFERENCE_PR', RecServiceLine."No.");
-                                AddAttribute(XMLNodePR, 'LIBELLE_PR', RecServiceLine.Description);
+                                AddAttribute(XMLNodePR, 'CODEIMPUTATION_PR', RecSaleHeader."Bill-to Customer No.");
+                                AddAttribute(XMLNodePR, 'REFERENCE_PR', SetItemNo(RecSaleLine."No."));
+                                AddAttribute(XMLNodePR, 'LIBELLE_PR', RecSaleLine.Description);
                                 AddAttribute(XMLNodePR, 'TYPE_PR', '2');
                                 AddAttribute(XMLNodePR, 'QuantiteEnCommande',
-                                    Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                    Format(RecSaleLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
                                 AddAttribute(XMLNodePR, 'QuantiteServie',
-                                    Format(RecServiceLine."Quantity Consumed", 0, '<Precision,2:2><Standard Format,2>'));
+                                    Format(RecSaleLine."Quantity Shipped", 0, '<Precision,2:2><Standard Format,2>'));
+                                // [FIX-1] RecSaleLine2 remplacé par RecSaleLine
                                 AddAttribute(XMLNodePR, 'PRIXHT',
-                                    Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100),
+                                    Format(RecSaleLine."Unit Price" * (1 - RecSaleLine."Line Discount %" / 100),
                                         0, '<Precision,2:2><Standard Format,2>'));
                                 AddAttribute(XMLNodePR, 'PRIXTTC',
-                                    Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100)
-                                        * (1 + RecServiceLine."VAT %" / 100),
+                                    Format(RecSaleLine."Unit Price" * (1 - RecSaleLine."Line Discount %" / 100)
+                                        * (1 + RecSaleLine."VAT %" / 100),
                                         0, '<Precision,2:2><Standard Format,2>'));
-                            end;
-                        until RecServiceLine.Next() = 0;
-                end;
-
-
-            end else
-                if Format(CODE_INTERR_DMS_Attribute.Value()) = '4' then begin
-
-                    begin
-                        Count := 0;
-                        RecServiceHeader.Reset();
-                        RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
-                        if RecServiceHeader.FindSet() then
-                            repeat
-                                AddElement(XMLRoot, 'LZRF51', XMLNode);
-                                AddAttribute(XMLNode, 'Code', '0');
-                                AddAttribute(XMLNode, 'TexteDMS', '');
-                                AddAttribute(XMLNode, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
-                                AddAttribute(XMLNode, 'ETATDOSSIERDMS', '1');
-                                Count += 1;
-                            until (RecServiceHeader.Next() = 0) or (Count = 30);
+                            until RecSaleLine.Next() = 0;
+                        end;
+                        // VEHICULE se ferme ici → après LDT/PR ✅
                     end;
-                end
-                else begin
+
+                end else begin
                     AddAttribute(XMLRoot, 'Code', '99');
-                    AddAttribute(XMLRoot, 'TexteDMS', 'Code interrogation inconnu');
+                    AddAttribute(XMLRoot, 'TexteDMS', 'Dossier non trouve');
+                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', Format(DOSSIER_DMS_ID_Attribute.Value()));
                 end;
+
+
+                // ── APV : Ordre de réparation ─────────────────────────
+            end else begin
+                RecServiceHeader.Reset();
+                RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
+                RecServiceHeader.SetRange("No.", Format(DOSSIER_DMS_ID_Attribute.Value()));
+                if RecServiceHeader.FindFirst() then begin
+
+                    // Calcul heure RDV depuis Order Time
+                    Milliseconds := RecServiceHeader."Order Time" - 000000T;
+                    Hours := Milliseconds div 1000 div 60 div 60;
+                    Milliseconds -= Hours * 1000 * 60 * 60;
+                    Minutes := Milliseconds div 1000 div 60;
+                    Milliseconds -= Minutes * 1000 * 60;
+                    Seconds := Milliseconds div 1000;
+
+                    // [FIX-2] Heure restitution depuis Pickup Time
+                    HoursRestit := Hours;
+                    MinutesRestit := Minutes;
+                    if RecServiceHeader."Order Time" <> 0T then begin
+                        Milliseconds := RecServiceHeader."Order Time" - 000000T;
+                        HoursRestit := Milliseconds div 1000 div 60 div 60;
+                        Milliseconds -= HoursRestit * 1000 * 60 * 60;
+                        MinutesRestit := Milliseconds div 1000 div 60;
+                    end;
+
+                    // ── LZRF51 attributs complets [ADD-1] ────────
+                    AddAttribute(XMLRoot, 'Code', '0');
+                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
+                    AddAttribute(XMLRoot, 'TexteDMS', '');
+                    // [FIX-5] Statut dynamique
+                    /* if RecServiceHeader.Status < RecServiceHeader.Status::"Partly Invoiced" then
+                        AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '1')
+                    else */
+                    AddAttribute(XMLRoot, 'ETATDOSSIERDMS', '1');
+                    AddAttribute(XMLRoot, 'RDV_DMS_ID', RecServiceHeader."No.");
+                    AddAttribute(XMLRoot, 'ANNEERDV', Format(Date2DMY(RecServiceHeader."Order Date", 3)));
+                    AddAttribute(XMLRoot, 'MOISRDV', Format(Date2DMY(RecServiceHeader."Order Date", 2)));
+                    AddAttribute(XMLRoot, 'JOURRDV', Format(Date2DMY(RecServiceHeader."Order Date", 1)));
+                    AddAttribute(XMLRoot, 'HEURESRDV', Format(Hours));
+                    AddAttribute(XMLRoot, 'MINUTESRDV', Format(Minutes));
+                    AddAttribute(XMLRoot, 'TPSIMMO', '');//Format(RecServiceHeader.TPSIMMO));      // [ADD-1]
+                    AddAttribute(XMLRoot, 'EQUIPE', '');
+                    // [FIX-3] Date restitution depuis Pickup Date
+                    if RecServiceHeader."Order Date" <> 0D then begin
+                        AddAttribute(XMLRoot, 'ANNEERDV_RESTIT', Format(Date2DMY(RecServiceHeader."Order Date", 3)));
+                        AddAttribute(XMLRoot, 'MOISRDV_RESTIT', Format(Date2DMY(RecServiceHeader."Order Date", 2)));
+                        AddAttribute(XMLRoot, 'JOURRDV_RESTIT', Format(Date2DMY(RecServiceHeader."Order Date", 1)));
+                    end else begin
+                        AddAttribute(XMLRoot, 'ANNEERDV_RESTIT', '');
+                        AddAttribute(XMLRoot, 'MOISRDV_RESTIT', '');
+                        AddAttribute(XMLRoot, 'JOURRDV_RESTIT', '');
+                    end;
+                    AddAttribute(XMLRoot, 'HEURESRDV_RESTIT', Format(HoursRestit));
+                    AddAttribute(XMLRoot, 'MINUTESRDV_RESTIT', Format(MinutesRestit));
+                    AddAttribute(XMLRoot, 'RETOURATELIER', '');                              // [ADD-1]
+                    AddAttribute(XMLRoot, 'RemiseDossier', '');                              // [ADD-1]
+                    AddAttribute(XMLRoot, 'MotifRemise', '');                                // [ADD-1]
+                    AddAttribute(XMLRoot, 'NUMEROCARTEDEREPERAGE', '');                      // [ADD-1] V14
+                    AddAttribute(XMLRoot, 'MARQUE_RECEP', '');                               // [ADD-1] V14
+                    AddAttribute(XMLRoot, 'SIGNATURE_NUMERIQUE', '');                        // [ADD-1] V14
+
+                    // ── CLIENT complet [ADD-2] ────────────────────
+                    RecCustomer.Reset();
+                    RecCustomer.SetFilter("No.", '%1', RecServiceHeader."Sell-to Customer No.");
+                    if RecCustomer.FindFirst() then begin
+                        AddElement(XMLRoot, 'CLIENT', XMLNode);
+                        AddAttribute(XMLNode, 'CLIENT_DMS_ID', RecCustomer."No.");
+                        AddAttribute(XMLNode, 'TypeClient', Format(RecCustomer."Partner Type"));
+                        AddAttribute(XMLNode, 'Nom', RecCustomer.Name);
+                        AddAttribute(XMLNode, 'Prenom', RecCustomer."Name 2");
+                        AddAttribute(XMLNode, 'PhoneMobile', RecCustomer."Mobile Phone No.");
+                        AddAttribute(XMLNode, 'Email', RecCustomer."E-Mail");
+                        AddAttribute(XMLNode, 'TypeEntreprise', RecCustomer."DLT function code");
+                        AddAttribute(XMLNode, 'RaisonSociale', RecCustomer.Name);
+                        AddAttribute(XMLNode, 'NumeroVoie', '');
+                        AddAttribute(XMLNode, 'TypeVoie', '');
+                        AddAttribute(XMLNode, 'Adresse1', RecCustomer.Address);
+                        AddAttribute(XMLNode, 'Adresse2', RecCustomer."Address 2");
+                        AddAttribute(XMLNode, 'Adresse3', '');
+                        AddAttribute(XMLNode, 'Ville', RecCustomer.City);
+                        AddAttribute(XMLNode, 'CodePostal', RecCustomer."Post Code");
+                        if RecCustomer.County <> '' then
+                            AddAttribute(XMLNode, 'Pays', RecCustomer.County)
+                        else
+                            AddAttribute(XMLNode, 'Pays', 'TN');
+                        AddAttribute(XMLNode, 'NumeroCompte', RecCustomer."No.");
+                        RecCustomer.CalcFields("Balance (LCY)");
+                        AddAttribute(XMLNode, 'SoldeClient', Format(RecCustomer."Balance (LCY)", 0, '<Precision,2:2><Standard Format,2>'));
+                        AddAttribute(XMLNode, 'PhoneDomicile', '');
+                        AddAttribute(XMLNode, 'PhoneBureau', RecCustomer."Phone No.");
+                        AddAttribute(XMLNode, 'NumeroPoste', '');
+                        AddAttribute(XMLNode, 'Fax', RecCustomer."Fax No.");
+                        AddAttribute(XMLNode, 'TEXTE_LIBRE', '');
+                        AddAttribute(XMLNode, 'Observations', '');
+                    end;
+
+                    // ── VEHICULE complet [ADD-3] + LDT enfants [FIX-6] ──
+                    RecVehicle.Reset();
+                    RecVehicle.SetFilter(VIN, '%1', RecServiceHeader.VIN);
+                    if RecVehicle.FindFirst() then begin
+                        AddElement(XMLRoot, 'VEHICULE', XMLNodeVehicule);
+                        AddAttribute(XMLNodeVehicule, 'VEHICULE_DMS_ID', RecVehicle.VIN);
+                        AddAttribute(XMLNodeVehicule, 'LibelleMarque', RecVehicle."Make Code");
+                        AddAttribute(XMLNodeVehicule, 'LibelleModele', RecVehicle."Model Code");
+                        AddAttribute(XMLNodeVehicule, 'VIN_WMI', CopyStr(RecVehicle.VIN, 1, 3));
+                        AddAttribute(XMLNodeVehicule, 'VIN_VDS', CopyStr(RecVehicle.VIN, 4, 6));
+                        AddAttribute(XMLNodeVehicule, 'VIN_VIS', CopyStr(RecVehicle.VIN, 10, 8));
+                        AddAttribute(XMLNodeVehicule, 'Immatriculation', RecVehicle."Registration No.");
+                        if RecVehicle."First Registration Date" <> 0D then begin
+                            AddAttribute(XMLNodeVehicule, 'AnneeMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 3)));
+                            AddAttribute(XMLNodeVehicule, 'MoisMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 2)));
+                            AddAttribute(XMLNodeVehicule, 'JourMiseCirculation', Format(Date2DMY(RecVehicle."First Registration Date", 1)));
+                        end else begin
+                            AddAttribute(XMLNodeVehicule, 'AnneeMiseCirculation', '');
+                            AddAttribute(XMLNodeVehicule, 'MoisMiseCirculation', '');
+                            AddAttribute(XMLNodeVehicule, 'JourMiseCirculation', '');
+                        end;
+                        AddAttribute(XMLNodeVehicule, 'DernierKilometrage', Format(RecVehicle."Variable Field Run 1", 0, '<Standard Format,2>'));
+                        AddAttribute(XMLNodeVehicule, 'CodeOPB', '');
+                        AddAttribute(XMLNodeVehicule, 'TypeEntretien', '');
+
+                        // LDT : Lignes affectées à un Job — enfant de VEHICULE
+                        RecServiceJobLine.Reset();
+                        RecServiceJobLine.SetFilter("Document Type", '%1', RecServiceHeader."Document Type");
+                        RecServiceJobLine.SetFilter("Document No.", '%1', RecServiceHeader."No.");
+                        if RecServiceJobLine.FindFirst() then
+                            repeat
+                                AddElement(XMLNodeVehicule, 'LDT', XMLNodeLDT);
+                                AddAttribute(XMLNodeLDT, TypeXX + '_LDT',
+                                    Format(CheckTypeImputationByCustomer(RecServiceJobLine."Bill-to Customer No.")));
+                                AddAttribute(XMLNodeLDT, 'CODEIMPUTATION_LDT', RecServiceJobLine."Bill-to Customer No.");
+                                AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', RecServiceJobLine.Commentaire);
+                                AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+                                if RecServiceJobLine."Package No." <> '' then
+                                    AddAttribute(XMLNodeLDT, 'ReferenceFF', RecServiceJobLine."Package No.")
+                                else
+                                    AddAttribute(XMLNodeLDT, 'ReferenceFF', '');
+                                if RecServiceJobLine."Package No." <> '' then begin
+                                    if RecServiceJobLine."Package Type" = RecServiceJobLine."Package Type"::SBOX then
+                                        AddAttribute(XMLNodeLDT, 'TYPEFORFAIT', '1')
+                                    else
+                                        AddAttribute(XMLNodeLDT, 'TYPEFORFAIT', '2');
+                                end else
+                                    AddAttribute(XMLNodeLDT, 'TYPEFORFAIT', '');
+                                if RecServiceJobLine.Commentaire <> '' then
+                                    AddAttribute(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL', RecServiceJobLine.Commentaire)
+                                else
+                                    AddAttribute(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL', 'Vide');
+                                AddAttribute(XMLNodeLDT, 'COMMENTAIRES_LDT', '');
+                                AddAttribute(XMLNodeLDT, 'ACCORD_CLIENT', '');
+                                AddAttribute(XMLNodeLDT, 'PRIXHT_LDT', '');                  // [ADD-4]
+                                AddAttribute(XMLNodeLDT, 'PRIXTTC_LDT', '');                 // [ADD-4]
+                                AddAttribute(XMLNodeLDT, 'RemisePreFac', '');                // [ADD-4]
+                                AddAttribute(XMLNodeLDT, 'DOSSIER_SAGAI', '');              // [ADD-4]
+                                AddAttribute(XMLNodeLDT, 'Taux_TVA', '');                   // [ADD-4] V14
+
+                                RecServiceLine.Reset();
+                                RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
+                                RecServiceLine.SetRange("Document No.", RecServiceHeader."No.");
+                                RecServiceLine.SetRange("DLT Instruction Line", RecServiceJobLine."Task No.");
+                                if RecServiceLine.FindFirst() then
+                                    repeat
+                                        if RecServiceLine.Type = RecServiceLine.Type::Labor then begin
+                                            AddElement(XMLNodeLDT, 'MO', XMLNodeMO);
+                                            AddAttribute(XMLNodeMO, 'LIGNE_DT_ID', RecServiceJobLine."Instruction Code");
+                                            AddAttribute(XMLNodeMO, 'LIGNE_DT_ID_DMS', Format(RecServiceLine."Line No."));
+                                            AddAttribute(XMLNodeMO, TypeXX + '_MO', '');
+                                            AddAttribute(XMLNodeMO, 'CODEIMPUTATION_MO', RecServiceLine."Bill-to Customer No.");
+                                            if RecServiceLine."SBOX MO" <> '' then
+                                                AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."SBOX MO")
+                                            else begin
+                                                if RecServiceLabor.Get(RecServiceLine."No.") then
+                                                    AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLabor."STF No.")
+                                                else
+                                                    AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."No.");
+                                            end;
+                                            AddAttribute(XMLNodeMO, 'TYPEOPERATION', '2');
+                                            AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE', '');
+                                            AddAttribute(XMLNodeMO, 'TEMPSGLOBAL',
+                                                Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodeMO, 'TECHNICITE', '1');
+                                            AddAttribute(XMLNodeMO, 'METIER', 'T');
+                                            AddAttribute(XMLNodeMO, 'LIBELLEOPERATION', RecServiceLine.Description);
+                                            AddAttribute(XMLNodeMO, 'PRIXHT_MO',
+                                                Format(RecServiceLine.Amount, 0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodeMO, 'PRIXTTC_MO',
+                                                Format(RecServiceLine."Amount Including VAT", 0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodeMO, 'CODEVENTILATION', '');
+                                            AddAttribute(XMLNodeMO, 'QUANTITE',
+                                                Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodeMO, 'SOLD_SAGAI', '');
+                                            AddAttribute(XMLNodeMO, 'Taux_TVA', '');        // V14
+                                        end;
+                                        if RecServiceLine.Type = RecServiceLine.Type::Item then begin
+                                            AddElement(XMLNodeLDT, 'PR', XMLNodePR);
+                                            AddAttribute(XMLNodePR, 'LIGNE_DT_ID', RecServiceJobLine."Instruction Code");
+                                            AddAttribute(XMLNodePR, 'LIGNE_DT_ID_DMS', Format(RecServiceLine."Line No."));
+                                            AddAttribute(XMLNodePR, TypeXX + '_PR', '');
+                                            AddAttribute(XMLNodePR, 'CODEIMPUTATIONDMS_PR', RecServiceLine."Bill-to Customer No."); // [ADD-5]
+                                            AddAttribute(XMLNodePR, 'TYPEFACTURATION_PR', '1');  // [ADD-5]
+                                            AddAttribute(XMLNodePR, 'REFERENCE_PR', SetItemNo(RecServiceLine."No."));
+                                            AddAttribute(XMLNodePR, 'LIBELLE_PR', RecServiceLine.Description);
+                                            AddAttribute(XMLNodePR, 'TYPE_PR', '2');
+                                            AddAttribute(XMLNodePR, 'QuantiteEnCommande',
+                                                Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodePR, 'QuantiteServie',
+                                                Format(RecServiceLine."Quantity Consumed", 0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodePR, 'PRIXHT',
+                                                Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100),
+                                                    0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodePR, 'PRIXTTC',
+                                                Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100)
+                                                    * (1 + RecServiceLine."VAT %" / 100),
+                                                    0, '<Precision,2:2><Standard Format,2>'));
+                                            AddAttribute(XMLNodePR, 'SOMME_SAGAI', '');     // [ADD-5]
+                                            AddAttribute(XMLNodePR, 'Taux_TVA',
+                                                Format(RecServiceLine."VAT %", 0, '<Precision,2:2><Standard Format,2>')); // [ADD-5] V14
+                                        end;
+                                    until RecServiceLine.Next() = 0;
+                            until RecServiceJobLine.Next() = 0;
+
+                        // LDT "A Classer" — enfant de VEHICULE
+                        AddElement(XMLNodeVehicule, 'LDT', XMLNodeLDT);
+                        AddAttribute(XMLNodeLDT, TypeXX + '_LDT',
+                            Format(CheckTypeImputationByCustomer(RecServiceLine."Bill-to Customer No.")));
+                        AddAttribute(XMLNodeLDT, 'CODEIMPUTATION_LDT', RecServiceLine."Bill-to Customer No.");
+                        AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', '');
+                        AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID_DMS', '');
+                        AddAttribute(XMLNodeLDT, 'ReferenceFF', '');
+                        AddAttribute(XMLNodeLDT, 'TYPEFORFAIT', '');
+                        AddAttribute(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL', 'A Classer');
+                        AddAttribute(XMLNodeLDT, 'COMMENTAIRES_LDT', '');
+                        AddAttribute(XMLNodeLDT, 'ACCORD_CLIENT', '');
+                        AddAttribute(XMLNodeLDT, 'PRIXHT_LDT', '');
+                        AddAttribute(XMLNodeLDT, 'PRIXTTC_LDT', '');
+                        AddAttribute(XMLNodeLDT, 'RemisePreFac', '');
+                        AddAttribute(XMLNodeLDT, 'DOSSIER_SAGAI', '');
+                        AddAttribute(XMLNodeLDT, 'Taux_TVA', '');
+
+                        RecServiceLine.Reset();
+                        RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
+                        RecServiceLine.SetRange("Document No.", RecServiceHeader."No.");
+                        RecServiceLine.SetRange("DLT Instruction Line", 0);
+                        if RecServiceLine.FindFirst() then
+                            repeat
+                                if RecServiceLine.Type = RecServiceLine.Type::Labor then begin
+                                    AddElement(XMLNodeLDT, 'MO', XMLNodeMO);
+                                    AddAttribute(XMLNodeMO, 'LIGNE_DT_ID', '');
+                                    AddAttribute(XMLNodeMO, 'LIGNE_DT_ID_DMS', '');
+                                    AddAttribute(XMLNodeMO, TypeXX + '_MO',
+                                        Format(CheckTypeImputationByCustomer(RecServiceLine."Bill-to Customer No.")));
+                                    AddAttribute(XMLNodeMO, 'CODEIMPUTATION_MO', RecServiceLine."Bill-to Customer No.");
+                                    if RecServiceLabor.Get(RecServiceLine."No.") then
+                                        AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLabor."STF No.")
+                                    else
+                                        AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."No.");
+                                    AddAttribute(XMLNodeMO, 'TYPEOPERATION', '');
+                                    AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE', '');
+                                    AddAttribute(XMLNodeMO, 'TEMPSGLOBAL',
+                                        Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodeMO, 'TECHNICITE', '1');
+                                    AddAttribute(XMLNodeMO, 'METIER', 'T');
+                                    AddAttribute(XMLNodeMO, 'LIBELLEOPERATION', RecServiceLine.Description);
+                                    AddAttribute(XMLNodeMO, 'PRIXHT_MO',
+                                        Format(RecServiceLine.Amount, 0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodeMO, 'PRIXTTC_MO',
+                                        Format(RecServiceLine."Amount Including VAT", 0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodeMO, 'CODEVENTILATION', '');
+                                    AddAttribute(XMLNodeMO, 'QUANTITE',
+                                        Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodeMO, 'SOLD_SAGAI', '');
+                                    AddAttribute(XMLNodeMO, 'Taux_TVA', '');
+                                end;
+                                if RecServiceLine.Type = RecServiceLine.Type::Item then begin
+                                    AddElement(XMLNodeLDT, 'PR', XMLNodePR);
+                                    AddAttribute(XMLNodePR, 'LIGNE_DT_ID', '');
+                                    AddAttribute(XMLNodePR, 'LIGNE_DT_ID_DMS', '');
+                                    AddAttribute(XMLNodePR, TypeXX + '_PR', '');
+                                    AddAttribute(XMLNodePR, 'CODEIMPUTATIONDMS_PR', RecServiceLine."Bill-to Customer No."); // [ADD-5]
+                                    AddAttribute(XMLNodePR, 'TYPEFACTURATION_PR', '1');      // [ADD-5]
+                                    AddAttribute(XMLNodePR, 'REFERENCE_PR', RecServiceLine."No.");
+                                    AddAttribute(XMLNodePR, 'LIBELLE_PR', RecServiceLine.Description);
+                                    AddAttribute(XMLNodePR, 'TYPE_PR', '2');
+                                    AddAttribute(XMLNodePR, 'QuantiteEnCommande',
+                                        Format(RecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodePR, 'QuantiteServie',
+                                        Format(RecServiceLine."Quantity Consumed", 0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodePR, 'PRIXHT',
+                                        Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100),
+                                            0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodePR, 'PRIXTTC',
+                                        Format(RecServiceLine."Unit Price" * (1 - RecServiceLine."Line Discount %" / 100)
+                                            * (1 + RecServiceLine."VAT %" / 100),
+                                            0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodePR, 'SOMME_SAGAI', '');              // [ADD-5]
+                                    AddAttribute(XMLNodePR, 'Taux_TVA',
+                                        Format(RecServiceLine."VAT %", 0, '<Precision,2:2><Standard Format,2>')); // [ADD-5] V14
+                                end;
+                            until RecServiceLine.Next() = 0;
+
+                        // VEHICULE se ferme ici → après tous les LDT ✅
+                    end;
+
+                end else begin
+                    AddAttribute(XMLRoot, 'Code', '99');
+                    AddAttribute(XMLRoot, 'TexteDMS', 'Dossier non trouve');
+                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', Format(DOSSIER_DMS_ID_Attribute.Value()));
+                end;
+            end; // fin else APV
+
+            // ─────────────────────────────────────────────────────────
+            // CAS 4 — Liste des dossiers (30 max)
+            // ─────────────────────────────────────────────────────────
+        end else if Format(CODE_INTERR_DMS_Attribute.Value()) = '4' then begin
+            Count := 0;
+            RecServiceHeader.Reset();
+            RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
+            if RecServiceHeader.FindSet() then
+                repeat
+                    AddElement(XMLRoot, 'LZRF51', XMLNode);
+                    AddAttribute(XMLNode, 'Code', '0');
+                    AddAttribute(XMLNode, 'TexteDMS', '');
+                    AddAttribute(XMLNode, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
+                    AddAttribute(XMLNode, 'ETATDOSSIERDMS', '1');
+                    AddAttribute(XMLNode, 'RDV_DMS_ID', '');
+                    Count += 1;
+                until (RecServiceHeader.Next() = 0) or (Count = 30);
+
+            // ─────────────────────────────────────────────────────────
+            // CAS INCONNU
+            // ─────────────────────────────────────────────────────────
+        end else begin
+            AddAttribute(XMLRoot, 'Code', '99');
+            AddAttribute(XMLRoot, 'TexteDMS', 'Code interrogation inconnu');
         end;
     end;
-
 
     procedure CheckTypeImputationByCustomer(lClient: Code[20]): Integer
     var
@@ -4078,101 +3192,4023 @@ codeunit 75101 "Business Layer"
             Error('Le paramétrage SBOX est manquant.');
 
         case lClient of
-            SBOXSetup."Warranty Imputation Code":
-                exit(1);
+            SBOXSetup."Warranty Imputation Account":
+                exit(SBOXSetup."Warranty Imputation Code");
 
-        /*  SBOXSetup."Client d'imputation ASSURANCE":
-             exit(SBOXSetup."Code d'imputation ASSURANCE");
+            SBOXSetup."Insurance Imputation Account":
+                exit(SBOXSetup."Insurance Imputation Code");
 
-         SBOXSetup."Client d'imputation CAMPAGNE":
-             exit(SBOXSetup."Code d'imputation CAMPAGNE");
+            SBOXSetup."Campaign Imputation Account":
+                exit(SBOXSetup."Campaign Imputation Code");
 
-         SBOXSetup."Client d'imputation CONTRAT":
-             exit(SBOXSetup."Code d'imputation CONTRAT");
+            SBOXSetup."Contract Imputation Account":
+                exit(SBOXSetup."Contract Imputation Code");
 
-         SBOXSetup."Client d'imputation INTERNE":
-             exit(SBOXSetup."Code d'imputation INTERNE");
+            SBOXSetup."Internal Imputation Account":
+                exit(SBOXSetup."Internal Imputation Code");
 
-         else
-             exit(SBOXSetup."Code d'imputation CLIENT"); */
+            else
+                exit(SBOXSetup."Customer Imputation Code");
         end;
     end;
 
-    procedure LZRF08T11(var TempRoot: XmlElement; CurrentDMS: XmlElement; RqType: Text)
+
+    procedure LZRF08T11V1(
+        XMLNodeReq: XmlElement;
+        var XMLDms: XmlElement;
+        DMSRoot: XmlElement)
     var
         XmlNodesPR: XmlNodeList;
         XmlNodePR: XmlNode;
-        XMLRoot: XmlElement;
-        RecItem: Record Item;
-        CODEIMPUTATIONDMS_PR: Text[30];
-        LIGNE_DT_ID: Text[30];
-        TYPEFACTURATION_PR: Code[2];
+        CODEIMPUTATIONDMS_PR: Code[20];
+        LIGNE_DT_ID: Code[20];
+        XMLRoot08: XmlElement;
+        XMLRoot46: XmlElement;
+        ProcessedItems: Dictionary of [Text, Boolean];
+        ItemKey: Text;
         i: Integer;
     begin
-
-        // récupérer les PR dans la requête
-        if not CurrentDMS.SelectNodes('PR', XmlNodesPR) then
+        if not XMLNodeReq.SelectNodes('PR', XmlNodesPR) then
             exit;
-
         if XmlNodesPR.Count = 0 then
             exit;
 
-        // créer noeud LZRF08 dans la réponse
-        XMLRoot := XmlElement.Create('LZRF08');
-        TempRoot.Add(XMLRoot);
+        XMLRoot08 := XmlElement.Create('LZRF08');
+        XMLRoot08.SetAttribute('Code', '0');
+        XMLRoot08.SetAttribute('TexteDMS', '');
 
-        XMLRoot.SetAttribute('Code', '0');
-        XMLRoot.SetAttribute('TexteDMS', '');
+        XMLRoot46 := XmlElement.Create('LZRF46');
+        XMLRoot46.SetAttribute('Code', '0');
+        XMLRoot46.SetAttribute('TexteDMS', '');
 
-        CODEIMPUTATIONDMS_PR := GetAttributeValue(CurrentDMS, 'CLIENT_DMS_ID');
+        CODEIMPUTATIONDMS_PR := GetAttributeValue(DMSRoot, 'CLIENT_DMS_ID');
 
         for i := 1 to XmlNodesPR.Count do begin
-
             XmlNodesPR.Get(i, XmlNodePR);
 
             LIGNE_DT_ID := GetAttributeValue(XmlNodePR.AsXmlElement(), 'LIGNE_DT_ID');
-            TYPEFACTURATION_PR := GetAttributeValue(XmlNodePR.AsXmlElement(), TypeXX + '_PR');
 
-            //to fix CheckCustomerByTypeImputation(TYPEFACTURATION_PR, CODEIMPUTATIONDMS_PR);
+            // ✅ Clé de dédup : une seule fois par référence + LIGNE_DT_ID
+            ItemKey := GetAttributeValue(XmlNodePR.AsXmlElement(), 'REFERENCE_PR') + '|' + LIGNE_DT_ID;
 
-            HandlePR(
-                TempRoot,
-                XMLRoot,
-                GetAttributeValue(XmlNodePR.AsXmlElement(), 'REFERENCE_PR'),
-                CODEIMPUTATIONDMS_PR,
-                LIGNE_DT_ID
-            );
+            if not ProcessedItems.ContainsKey(ItemKey) then begin
+                ProcessedItems.Add(ItemKey, true);
 
+                LZRF08_PR(
+                    XMLRoot08,
+                    XMLRoot46,
+                    GetAttributeValue(XmlNodePR.AsXmlElement(), 'REFERENCE_PR'),
+                    CODEIMPUTATIONDMS_PR,
+                    LIGNE_DT_ID,
+                    ProcessedItems);
+            end;
         end;
+
+        XMLDms.Add(XMLRoot08);
+        XMLDms.Add(XMLRoot46);
+    end;
+
+    // ============================================================
+
+    procedure LZRF08_PR(
+        var XMLRoot08: XmlElement;
+        var XMLRoot46: XmlElement;
+        Item_Ref: Code[20];
+        CODEIMPUTATIONDMS_PR: Code[20];
+        LIGNE_DT_ID: Code[20];
+        var ProcessedItems: Dictionary of [Text, Boolean])
+    var
+        RecItem: Record Item;
+        RecNewItem: Record Item;
+        ItemSubstitution: Record "Item Substitution";
+        ItemKey: Text;
+    begin
+        RecItem.Reset();
+        RecItem.SetRange("No.", GetItemNo(Item_Ref));
+        RecItem.SetRange(Blocked, false);
+
+        if not RecItem.FindFirst() then begin
+            HandleBlockedOrMissingItem(
+                XMLRoot08,
+                XMLRoot46,
+                Item_Ref,
+                CODEIMPUTATIONDMS_PR,
+                LIGNE_DT_ID);
+            exit;
+        end;
+
+        // ── Article original : stock par LIGNE_DT_ID ──────────────────
+        ItemKey := RecItem."No." + '|ORIGINAL';
+
+        if not ProcessedItems.ContainsKey(ItemKey) then begin
+            ProcessedItems.Add(ItemKey, true);
+
+            AddPRLineAllLocations(
+                XMLRoot08,
+                RecItem,
+                Item_Ref,
+                '0',
+                '',
+                0,
+                LIGNE_DT_ID);
+        end;
+
+        // ── Prix article original : une seule fois toutes lignes confondues ──
+        if not ProcessedItems.ContainsKey(RecItem."No." + '|PRIX') then begin
+            ProcessedItems.Add(RecItem."No." + '|PRIX', true);
+            AddPRPriceLine(
+                XMLRoot46,
+                RecItem,
+                CODEIMPUTATIONDMS_PR,
+                LIGNE_DT_ID);
+        end;
+
+        // ── Substitutions ─────────────────────────────────────────────
+        ItemSubstitution.Reset();
+        ItemSubstitution.SetRange(Type, ItemSubstitution.Type::"Nonstock Item");
+        ItemSubstitution.SetRange("No.", RecItem."No.");
+
+        if ItemSubstitution.FindSet() then
+            repeat
+                if RecNewItem.Get(ItemSubstitution."Substitute No.") then begin
+
+                    if RecNewItem."No." <> RecItem."No." then begin
+
+                        // ── Stock substitut par LIGNE_DT_ID ───────────
+                        ItemKey := RecNewItem."No." + '|SUB';
+                        if not ProcessedItems.ContainsKey(ItemKey) then begin
+                            ProcessedItems.Add(ItemKey, true);
+
+                            AddPRLineAllLocations(
+                                XMLRoot08,
+                                RecNewItem,
+                                Item_Ref,
+                                '2',
+                                RecItem."No.",
+                                1,
+                                LIGNE_DT_ID);
+                        end;
+
+                        // ── Prix substitut : une seule fois ───────────
+                        if not ProcessedItems.ContainsKey(RecNewItem."No." + '|PRIX') then begin
+                            ProcessedItems.Add(RecNewItem."No." + '|PRIX', true);
+
+                            AddPRPriceLine(
+                                XMLRoot46,
+                                RecNewItem,
+                                CODEIMPUTATIONDMS_PR,
+                                LIGNE_DT_ID);
+                        end;
+
+                    end;
+                end;
+            until ItemSubstitution.Next() = 0;
+    end;
+
+    // ============================================================
+
+    local procedure AddPRLineAllLocations1(
+        var XMLRoot: XmlElement;
+        RecItem: Record Item;
+        Item_Ref: Code[20];
+        CodePR: Code[10];
+        ReferenceInitial: Code[20];
+        Coefficient: Decimal;
+        LIGNE_DT_ID: Code[20])
+    var
+        Location: Record Location;
+        ItemPerLoc: Record Item;
+        XMLNode: XmlElement;
+        QtyLocation: Decimal;
+    begin
+        RecItem.CalcFields("Qty. on Sales Order", "Reserved Qty. on Inventory");
+
+        Location.Reset();
+        Location.SetRange("DLT Exclude From Inventory", false);
+        Location.SetRange("Use As Parts Location Code", true);
+        Location.SetRange("Display in Service BOX", true);
+        if Location.FindSet() then
+            repeat
+                ItemPerLoc.Reset();
+                ItemPerLoc.SetRange("No.", RecItem."No.");
+                ItemPerLoc.SetRange("Location Filter", Location.Code);
+                ItemPerLoc.CalcFields(Inventory, "STF Available Inventory");
+
+                QtyLocation := ItemPerLoc."STF Available Inventory";
+
+                AddElement(XMLRoot, 'PR', XMLNode);
+
+                XMLNode.SetAttribute('ReferencePR', SetItemNo(RecItem."No."));
+                XMLNode.SetAttribute('CODE_PR', CodePR);
+                XMLNode.SetAttribute('idStockDMS', Location.Code);
+                XMLNode.SetAttribute('QuantiteDisponible',
+                    Format(QtyLocation, 0, '<Precision,2:2><Standard Format,2>'));
+                XMLNode.SetAttribute('LibellePR', RecItem.Description);
+                XMLNode.SetAttribute('LieuDeStockage', RecItem."Shelf No.");
+                XMLNode.SetAttribute('QuantiteEnCommande',
+                    Format(RecItem."Qty. on Sales Order",
+                        0, '<Precision,2:2><Standard Format,2>'));
+                XMLNode.SetAttribute('QuantiteReserveeSurLeStock',
+                    Format(RecItem."Reserved Qty. on Inventory",
+                        0, '<Precision,2:2><Standard Format,2>'));
+                XMLNode.SetAttribute('QuantiteUV', '');
+                XMLNode.SetAttribute('ReferencePRInitial', ReferenceInitial);
+                XMLNode.SetAttribute('WR_STOCK_PLACE', RecItem."Shelf No.");
+                XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+
+                if Coefficient <> 0 then
+                    XMLNode.SetAttribute('CoefficientDeRemplacement',
+                        Format(Coefficient, 0, '<Precision,2:2><Standard Format,2>'));
+
+            until Location.Next() = 0;
+    end;
+
+
+    local procedure AddPRLineAllLocationsLV(
+        var XMLRoot: XmlElement;
+        RecItem: Record Item;
+        Item_Ref: Code[20];
+        CodePR: Code[10];
+        ReferenceInitial: Code[20];
+        Coefficient: Decimal;
+        LIGNE_DT_ID: Code[20])
+    var
+        Location: Record Location;
+        LocationParent: Record Location;
+        ItemPerLoc: Record Item;
+        ItemParentPerLoc: Record Item;
+        XMLNode: XmlElement;
+        CompanyInformation: Record "Company Information";
+        QtyLocation: Decimal;
+        ParentCompany: Text[30];
+    begin
+        // Calcul des FlowFields globaux
+        RecItem.CalcFields("Qty. on Sales Order", "Reserved Qty. on Inventory");
+
+        // Société parente
+        CompanyInformation.Get();
+        ParentCompany := CompanyInformation."DLT Parent Company";
+
+        // ============================================================
+        // Société courante
+        // ============================================================
+        Location.Reset();
+        Location.SetRange("DLT Exclude From Inventory", false);
+        Location.SetRange("Use As Parts Location Code", true);
+        Location.SetRange("Display in Service BOX", true);
+
+        if Location.FindSet() then
+            repeat
+
+                QtyLocation := 0;
+
+                ItemPerLoc.Reset();
+                ItemPerLoc.SetRange("No.", RecItem."No.");
+
+                if ItemPerLoc.FindFirst() then begin
+
+                    // FlowFilters
+                    ItemPerLoc.SetRange("Location Filter", Location.Code);
+                    ItemPerLoc.SetRange("Date Filter", 0D, Today);
+
+                    // Calcul du FlowField
+                    ItemPerLoc.CalcFields("STF Available Inventory");
+
+                    QtyLocation := ItemPerLoc."STF Available Inventory";
+                end;
+
+                AddElement(XMLRoot, 'PR', XMLNode);
+
+                XMLNode.SetAttribute('ReferencePR', SetItemNo(RecItem."No."));
+                XMLNode.SetAttribute('CODE_PR', CodePR);
+                XMLNode.SetAttribute('idStockDMS', Location.Code);
+
+                XMLNode.SetAttribute(
+                    'QuantiteDisponible',
+                    Format(QtyLocation, 0, '<Precision,2:2><Standard Format,2>')
+                );
+
+                XMLNode.SetAttribute('LibellePR', RecItem.Description);
+                XMLNode.SetAttribute('LieuDeStockage', RecItem."Shelf No.");
+
+                XMLNode.SetAttribute(
+                    'QuantiteEnCommande',
+                    Format(
+                        RecItem."Qty. on Sales Order",
+                        0,
+                        '<Precision,2:2><Standard Format,2>'
+                    )
+                );
+
+                XMLNode.SetAttribute(
+                    'QuantiteReserveeSurLeStock',
+                    Format(
+                        RecItem."Reserved Qty. on Inventory",
+                        0,
+                        '<Precision,2:2><Standard Format,2>'
+                    )
+                );
+
+                XMLNode.SetAttribute('QuantiteUV', '');
+                XMLNode.SetAttribute('ReferencePRInitial', ReferenceInitial);
+                XMLNode.SetAttribute('WR_STOCK_PLACE', 'j');
+                XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+
+                if Coefficient <> 0 then
+                    XMLNode.SetAttribute(
+                        'CoefficientDeRemplacement',
+                        Format(
+                            Coefficient,
+                            0,
+                            '<Precision,2:2><Standard Format,2>'
+                        )
+                    );
+
+            until Location.Next() = 0;
+
+        // ============================================================
+        // Société parente
+        // ============================================================
+        if ParentCompany <> '' then begin
+
+            LocationParent.ChangeCompany(ParentCompany);
+
+            LocationParent.Reset();
+            LocationParent.SetRange("DLT Exclude From Inventory", false);
+            LocationParent.SetRange("Use As Parts Location Code", true);
+            LocationParent.SetRange("Display in Service BOX", true);
+
+            if LocationParent.FindSet() then
+                repeat
+
+                    QtyLocation := 0;
+
+                    ItemParentPerLoc.ChangeCompany(ParentCompany);
+                    ItemParentPerLoc.Reset();
+                    ItemParentPerLoc.SetRange("No.", RecItem."No.");
+
+                    if ItemParentPerLoc.FindFirst() then begin
+
+                        // FlowFilters
+                        ItemParentPerLoc.SetRange("Location Filter", LocationParent.Code);
+                        ItemParentPerLoc.SetRange("Date Filter", 0D, Today);
+
+                        // Calcul FlowField
+                        ItemParentPerLoc.CalcFields("STF Available Inventory");
+
+                        QtyLocation := ItemParentPerLoc."STF Available Inventory";
+                    end;
+
+                    AddElement(XMLRoot, 'PR', XMLNode);
+
+                    XMLNode.SetAttribute('ReferencePR', SetItemNo(RecItem."No."));
+                    XMLNode.SetAttribute('CODE_PR', CodePR);
+                    XMLNode.SetAttribute('idStockDMS', LocationParent.Code);
+
+                    XMLNode.SetAttribute(
+                        'QuantiteDisponible',
+                        Format(QtyLocation, 0, '<Precision,2:2><Standard Format,2>')
+                    );
+
+                    XMLNode.SetAttribute('LibellePR', RecItem.Description);
+                    XMLNode.SetAttribute('LieuDeStockage', RecItem."Shelf No.");
+
+                    XMLNode.SetAttribute(
+                        'QuantiteEnCommande',
+                        Format(
+                            RecItem."Qty. on Sales Order",
+                            0,
+                            '<Precision,2:2><Standard Format,2>'
+                        )
+                    );
+
+                    XMLNode.SetAttribute(
+                        'QuantiteReserveeSurLeStock',
+                        Format(
+                            RecItem."Reserved Qty. on Inventory",
+                            0,
+                            '<Precision,2:2><Standard Format,2>'
+                        )
+                    );
+
+                    XMLNode.SetAttribute('QuantiteUV', '');
+                    XMLNode.SetAttribute('ReferencePRInitial', ReferenceInitial);
+                    XMLNode.SetAttribute('WR_STOCK_PLACE', RecItem."Shelf No.");
+                    XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+
+                    if Coefficient <> 0 then
+                        XMLNode.SetAttribute(
+                            'CoefficientDeRemplacement',
+                            Format(
+                                Coefficient,
+                                0,
+                                '<Precision,2:2><Standard Format,2>'
+                            )
+                        );
+
+                until LocationParent.Next() = 0;
+        end;
+    end;
+
+    local procedure AddPRLineAllLocations(
+            var XMLRoot: XmlElement;
+            RecItem: Record Item;
+            Item_Ref: Code[20];
+            CodePR: Code[10];
+            ReferenceInitial: Code[20];
+            Coefficient: Decimal;
+            LIGNE_DT_ID: Code[20])
+    var
+        Location: Record Location;
+        LocationParent: Record Location;
+        ItemPerLoc: Record Item;
+        ItemParentPerLoc: Record Item;
+        XMLNode: XmlElement;
+        CompanyInformation: Record "Company Information";
+        QtyLocation: Decimal;
+        ParentCompany: Text[30];
+        BinCode: Code[20];          // ✅ ajout
+    begin
+        RecItem.CalcFields("Qty. on Sales Order", "Reserved Qty. on Inventory");
+
+        CompanyInformation.Get();
+        ParentCompany := CompanyInformation."DLT Parent Company";
+
+        // ============================================================
+        // Société courante
+        // ============================================================
+        Location.Reset();
+        Location.SetRange("DLT Exclude From Inventory", false);
+        Location.SetRange("Use As Parts Location Code", true);
+        Location.SetRange("Display in Service BOX", true);
+
+        if Location.FindSet() then
+            repeat
+                QtyLocation := 0;
+
+                ItemPerLoc.Reset();
+                ItemPerLoc.SetRange("No.", RecItem."No.");
+
+                if ItemPerLoc.FindFirst() then begin
+                    ItemPerLoc.SetRange("Location Filter", Location.Code);
+                    ItemPerLoc.SetRange("Date Filter", 0D, Today);
+                    ItemPerLoc.CalcFields("STF Available Inventory");
+                    QtyLocation := ItemPerLoc."STF Available Inventory";
+                end;
+
+                // ✅ Bin Code société courante (pas de ChangeCompany)
+                BinCode := GetBinCode(RecItem."No.", Location.Code, '');
+
+                AddElement(XMLRoot, 'PR', XMLNode);
+
+                XMLNode.SetAttribute('ReferencePR', SetItemNo(RecItem."No."));
+                XMLNode.SetAttribute('CODE_PR', CodePR);
+                XMLNode.SetAttribute('idStockDMS', Location.Code);
+                XMLNode.SetAttribute(
+                    'QuantiteDisponible',
+                    Format(QtyLocation, 0, '<Precision,2:2><Standard Format,2>'));
+                XMLNode.SetAttribute('LibellePR', RecItem.Description);
+
+                // ✅ Bin Content au lieu de Shelf No.
+                XMLNode.SetAttribute('LieuDeStockage', BinCode);
+
+                XMLNode.SetAttribute(
+                    'QuantiteEnCommande',
+                    Format(RecItem."Qty. on Sales Order",
+                        0, '<Precision,2:2><Standard Format,2>'));
+                XMLNode.SetAttribute(
+                    'QuantiteReserveeSurLeStock',
+                    Format(RecItem."Reserved Qty. on Inventory",
+                        0, '<Precision,2:2><Standard Format,2>'));
+                XMLNode.SetAttribute('QuantiteUV', '');
+                XMLNode.SetAttribute('ReferencePRInitial', ReferenceInitial);
+                XMLNode.SetAttribute('WR_STOCK_PLACE', 'j');
+                XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+
+                if Coefficient <> 0 then
+                    XMLNode.SetAttribute(
+                        'CoefficientDeRemplacement',
+                        Format(Coefficient, 0, '<Precision,2:2><Standard Format,2>'));
+
+            until Location.Next() = 0;
+
+        // ============================================================
+        // Société parente
+        // ============================================================
+        if ParentCompany <> '' then begin
+
+            LocationParent.ChangeCompany(ParentCompany);
+            LocationParent.Reset();
+            LocationParent.SetRange("DLT Exclude From Inventory", false);
+            LocationParent.SetRange("Use As Parts Location Code", true);
+            LocationParent.SetRange("Display in Service BOX", true);
+
+            if LocationParent.FindSet() then
+                repeat
+                    QtyLocation := 0;
+
+                    ItemParentPerLoc.ChangeCompany(ParentCompany);
+                    ItemParentPerLoc.Reset();
+                    ItemParentPerLoc.SetRange("No.", RecItem."No.");
+
+                    if ItemParentPerLoc.FindFirst() then begin
+                        ItemParentPerLoc.SetRange("Location Filter", LocationParent.Code);
+                        ItemParentPerLoc.SetRange("Date Filter", 0D, Today);
+                        ItemParentPerLoc.CalcFields("STF Available Inventory");
+                        QtyLocation := ItemParentPerLoc."STF Available Inventory";
+                    end;
+
+                    // ✅ Bin Code société parente (avec ChangeCompany)
+                    BinCode := GetBinCode(RecItem."No.", LocationParent.Code, ParentCompany);
+
+                    AddElement(XMLRoot, 'PR', XMLNode);
+
+                    XMLNode.SetAttribute('ReferencePR', SetItemNo(RecItem."No."));
+                    XMLNode.SetAttribute('CODE_PR', CodePR);
+                    XMLNode.SetAttribute('idStockDMS', LocationParent.Code);
+                    XMLNode.SetAttribute(
+                        'QuantiteDisponible',
+                        Format(QtyLocation, 0, '<Precision,2:2><Standard Format,2>'));
+                    XMLNode.SetAttribute('LibellePR', RecItem.Description);
+
+                    // ✅ Bin Content au lieu de Shelf No.
+                    XMLNode.SetAttribute('LieuDeStockage', BinCode);
+
+                    XMLNode.SetAttribute(
+                        'QuantiteEnCommande',
+                        Format(RecItem."Qty. on Sales Order",
+                            0, '<Precision,2:2><Standard Format,2>'));
+                    XMLNode.SetAttribute(
+                        'QuantiteReserveeSurLeStock',
+                        Format(RecItem."Reserved Qty. on Inventory",
+                            0, '<Precision,2:2><Standard Format,2>'));
+                    XMLNode.SetAttribute('QuantiteUV', '');
+                    XMLNode.SetAttribute('ReferencePRInitial', ReferenceInitial);
+
+                    // ✅ Bin Content au lieu de Shelf No.
+                    XMLNode.SetAttribute('WR_STOCK_PLACE', BinCode);
+
+                    XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+
+                    if Coefficient <> 0 then
+                        XMLNode.SetAttribute(
+                            'CoefficientDeRemplacement',
+                            Format(Coefficient, 0, '<Precision,2:2><Standard Format,2>'));
+
+                until LocationParent.Next() = 0;
+        end;
+    end;
+
+    local procedure GetBinCode(
+    ItemNo: Code[20];
+    LocationCode: Code[10];
+    CompanyName: Text[30]): Code[20]
+    var
+        BinContent: Record "Bin Content";
+    begin
+        if CompanyName <> '' then
+            BinContent.ChangeCompany(CompanyName);
+
+        BinContent.SetRange("Item No.", ItemNo);
+        BinContent.SetRange("Location Code", LocationCode);
+        BinContent.SetRange(Default, true); // Bin par défaut en premier
+
+        if BinContent.FindFirst() then
+            exit(BinContent."Bin Code");
+
+        // Fallback : premier bin trouvé sans filtre Default
+        BinContent.SetRange(Default);
+        if BinContent.FindFirst() then
+            exit(BinContent."Bin Code");
+
+        exit(''); // Aucun bin trouvé
+    end;
+    // ============================================================
+    // LZRF08_PR
+    // Paramètres :
+    //   XMLRoot08 → reçoit les lignes <PR stock>
+    //   XMLRoot46 → reçoit les lignes <PR prix>
+    // ============================================================
+    procedure LZRF08_PRLV(
+        var XMLRoot08: XmlElement;
+        var XMLRoot46: XmlElement;
+        Item_Ref: Code[20];
+        CODEIMPUTATIONDMS_PR: Code[20];
+        LIGNE_DT_ID: Code[20])
+    var
+        RecItem: Record Item;
+        RecNewItem: Record Item;
+        DLTReplenishment: Codeunit "DLT Replenishment";
+        NewItemNo: Code[20];
+        ReplacementChain: Text[250];
+        Coefficient: Decimal;
+    begin
+        RecItem.Reset();
+        RecItem.SetRange("No.", GetItemNo(Item_Ref));
+        RecItem.SetRange(Blocked, false);
+
+        if RecItem.FindFirst() then begin
+
+            case RecItem."Replacement Status" of
+
+                // ── Article normal ─────────────────────────────────────────
+                RecItem."Replacement Status"::" ":
+                    begin
+                        // Stock → dans LZRF08
+                        AddPRLineAllLocations(
+                            XMLRoot08, RecItem, Item_Ref, '0', '', 0, LIGNE_DT_ID);
+                        // Prix → dans LZRF46
+                        AddPRPriceLine(
+                            XMLRoot46, RecItem, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+                    end;
+
+                // ── Article remplacé ───────────────────────────────────────
+                RecItem."Replacement Status"::Replaced:
+                    begin
+                        // Ancien article : stock + prix
+                        AddPRLineAllLocations(
+                            XMLRoot08, RecItem, Item_Ref, '0', '', 0, LIGNE_DT_ID);
+                        AddPRPriceLine(
+                            XMLRoot46, RecItem, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+
+                        // Article de remplacement : stock + prix
+                        ReplacementChain := '';
+                        NewItemNo := DLTReplenishment.GetLastReplacement(
+                            0, RecItem."No.", '', ReplacementChain, false);
+
+                        if (NewItemNo <> '') and RecNewItem.Get(NewItemNo) then begin
+                            Coefficient := GetReplacementCoefficient(
+                                DLTReplenishment, RecItem."No.", NewItemNo);
+
+                            AddPRLineAllLocations(
+                                XMLRoot08, RecNewItem, Item_Ref,
+                                '2', RecItem."No.", Coefficient, LIGNE_DT_ID);
+                            AddPRPriceLine(
+                                XMLRoot46, RecNewItem, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+                        end;
+                    end;
+
+            end;
+
+        end else
+            HandleBlockedOrMissingItem(
+                XMLRoot08, XMLRoot46, Item_Ref, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+    end;
+
+
+    procedure LZRF08_PRWorks(
+       var XMLRoot08: XmlElement;
+       var XMLRoot46: XmlElement;
+       Item_Ref: Code[20];
+       CODEIMPUTATIONDMS_PR: Code[20];
+       LIGNE_DT_ID: Code[20])
+    var
+        RecItem: Record Item;
+        RecNewItem: Record Item;
+        DLTReplenishment: Codeunit "DLT Replenishment";
+        NewItemNo: Code[20];
+        ReplacementChain: Text[250];
+        Coefficient: Decimal;
+    begin
+        RecItem.Reset();
+        RecItem.SetRange("No.", GetItemNo(Item_Ref));
+        RecItem.SetRange(Blocked, false);
+
+        if RecItem.FindFirst() then begin
+
+            if RecItem."DLT Item Replacement No." = '' then begin
+                // ── Article normal ─────────────────────────────────────────
+                // Stock → dans LZRF08
+                AddPRLineAllLocations(
+                    XMLRoot08, RecItem, Item_Ref, '0', '', 0, LIGNE_DT_ID);
+                // Prix → dans LZRF46
+                AddPRPriceLine(
+                    XMLRoot46, RecItem, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+            end else begin
+                // ── Article remplacé ───────────────────────────────────────
+                // Ancien article : stock + prix
+                AddPRLineAllLocations(
+                    XMLRoot08, RecItem, Item_Ref, '0', '', 0, LIGNE_DT_ID);
+                AddPRPriceLine(
+                    XMLRoot46, RecItem, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+
+                // Article de remplacement : stock + prix
+                ReplacementChain := '';
+                NewItemNo := RecItem."DLT Item Replacement No.";/* DLTReplenishment.GetLastReplacement(
+                    0, RecItem."No.", '', ReplacementChain, false); */
+
+                if (NewItemNo <> '') and RecNewItem.Get(NewItemNo) then begin
+                    Coefficient := GetReplacementCoefficient(
+                        DLTReplenishment, RecItem."No.", NewItemNo);
+
+                    AddPRLineAllLocations(
+                        XMLRoot08, RecNewItem, Item_Ref,
+                        '2', RecItem."No.", Coefficient, LIGNE_DT_ID);
+                    AddPRPriceLine(
+                        XMLRoot46, RecNewItem, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+                end;
+            end;
+
+        end else
+            HandleBlockedOrMissingItem(
+                XMLRoot08, XMLRoot46, Item_Ref, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+    end;
+
+
+    // ============================================================
+    // AddPRPriceLine
+    // Construit les lignes prix dans LZRF46 pour un article
+    //
+    // LZRF46T23V1 signature : (var TempRoot, CurrentDMS, CodeImputationDMS_PR)
+    // CurrentDMS doit contenir des noeuds <PR ReferencePR=... LIGNE_DT_ID=...>
+    // On construit un DMS temporaire avec un <PR> puis on appelle LZRF46T23V1
+    // ============================================================
+    local procedure AddPRPriceLine(
+     var XMLRoot46: XmlElement;
+     RecItem: Record Item;
+     CODEIMPUTATIONDMS_PR: Code[20];
+     LIGNE_DT_ID: Code[20])
+    var
+        TempDMS: XmlElement;
+        TempPR: XmlElement;
+        TempContainer: XmlElement;    // ← conteneur neutre
+        InnerLZRF46Node: XmlNode;
+        ChildNode: XmlNode;
+        ChildList: XmlNodeList;
+        InnerChildList: XmlNodeList;
+        i, j : Integer;
+    begin
+        // 1. Construire le <DMS> avec le <PR> à pricer
+        TempDMS := XmlElement.Create('DMS');
+        TempPR := XmlElement.Create('PR');
+        TempPR.SetAttribute('ReferencePR', SetItemNo(RecItem."No."));
+        TempPR.SetAttribute('CODE_PR', '0');
+        TempPR.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+        TempDMS.Add(TempPR);
+
+        // 2. LZRF46T23V1 va créer un <LZRF46> et l'ajouter dans TempContainer
+        TempContainer := XmlElement.Create('ROOT');
+        LZRF46T23V1(TempContainer, TempDMS, CODEIMPUTATIONDMS_PR);
+
+        // 3. Extraire les <PR> de l'intérieur du <LZRF46> créé
+        //    et les déplacer directement dans XMLRoot46
+        ChildList := TempContainer.GetChildNodes();
+        for i := 1 to ChildList.Count do begin
+            ChildList.Get(i, InnerLZRF46Node);           // c'est le <LZRF46> créé par LZRF46T23V1
+            InnerChildList := InnerLZRF46Node.AsXmlElement().GetChildNodes();
+            for j := 1 to InnerChildList.Count do begin
+                InnerChildList.Get(j, ChildNode);
+                ChildNode.Remove();
+                XMLRoot46.Add(ChildNode);                // <PR> directement dans XMLRoot46
+            end;
+        end;
+    end;
+    // ============================================================
+    // HandleBlockedOrMissingItem
+    // Article bloqué ou inexistant → CODE_PR = '99' dans LZRF08
+    // Pas de ligne prix dans LZRF46 pour les articles introuvables
+    // ============================================================
+    local procedure HandleBlockedOrMissingItem(
+        var XMLRoot08: XmlElement;
+        var XMLRoot46: XmlElement;
+        Item_Ref: Code[20];
+        CODEIMPUTATIONDMS_PR: Code[20];
+        LIGNE_DT_ID: Code[20])
+    var
+        RecItem: Record Item;
+        RecNewItem: Record Item;
+        DLTReplenishment: Codeunit "DLT Replenishment";
+        NewItemNo: Code[20];
+        ReplacementChain: Text[250];
+        Coefficient: Decimal;
+        XMLNode: XmlElement;
+    begin
+        RecItem.Reset();
+        RecItem.SetRange("No.", GetItemNo(Item_Ref));
+        RecItem.SetRange(Blocked, true);
+
+        if RecItem.FindFirst() and
+           (RecItem."Replacement Status" = RecItem."Replacement Status"::Replaced) then begin
+
+            // Ancien article bloqué → CODE_PR = '99'
+            AddElement(XMLRoot08, 'PR', XMLNode);
+            XMLNode.SetAttribute('ReferencePR', Item_Ref);
+            XMLNode.SetAttribute('CODE_PR', '99');
+            XMLNode.SetAttribute('idStockDMS', 'MAG_LB');
+            XMLNode.SetAttribute('LibellePR', '');
+            XMLNode.SetAttribute('LieuDeStockage', '');
+            XMLNode.SetAttribute('QuantiteDisponible', '0.00');
+            XMLNode.SetAttribute('QuantiteEnCommande', '0.00');
+            XMLNode.SetAttribute('QuantiteReserveeSurLeStock', '0.00');
+            XMLNode.SetAttribute('ReferencePRInitial', '');
+            XMLNode.SetAttribute('WR_STOCK_PLACE', '');
+            XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+
+            // Remplaçant → CODE_PR = '2' + prix dans LZRF46
+            ReplacementChain := '';
+            NewItemNo := DLTReplenishment.GetLastReplacement(
+                0, RecItem."No.", '', ReplacementChain, false);
+
+            if (NewItemNo <> '') and RecNewItem.Get(NewItemNo) then begin
+                Coefficient := GetReplacementCoefficient(
+                    DLTReplenishment, RecItem."No.", NewItemNo);
+
+                AddPRLineAllLocations(
+                    XMLRoot08, RecNewItem, Item_Ref,
+                    '2', RecItem."No.", Coefficient, LIGNE_DT_ID);
+                AddPRPriceLine(
+                    XMLRoot46, RecNewItem, CODEIMPUTATIONDMS_PR, LIGNE_DT_ID);
+            end;
+
+        end else begin
+            // Article inexistant ou bloqué sans remplacement → CODE_PR = '99'
+            AddElement(XMLRoot08, 'PR', XMLNode);
+            XMLNode.SetAttribute('ReferencePR', Item_Ref);
+            XMLNode.SetAttribute('CODE_PR', '99');
+            XMLNode.SetAttribute('idStockDMS', 'MAG_LB');
+            XMLNode.SetAttribute('LibellePR', '');
+            XMLNode.SetAttribute('LieuDeStockage', '');
+            XMLNode.SetAttribute('QuantiteDisponible', '0.00');
+            XMLNode.SetAttribute('QuantiteEnCommande', '0.00');
+            XMLNode.SetAttribute('QuantiteReserveeSurLeStock', '0.00');
+            XMLNode.SetAttribute('ReferencePRInitial', '');
+            XMLNode.SetAttribute('WR_STOCK_PLACE', '');
+            XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+        end;
+    end;
+
+    // ============================================================
+    // MoveChildrenTo
+    // ============================================================
+    local procedure MoveChildrenTo(var Src: XmlElement; var Dst: XmlElement)
+    var
+        ChildNode: XmlNode;
+        ChildList: XmlNodeList;
+        i: Integer;
+    begin
+        ChildList := Src.GetChildNodes();
+        for i := 1 to ChildList.Count do begin
+            ChildList.Get(i, ChildNode);
+            ChildNode.Remove();
+            Dst.Add(ChildNode);
+        end;
+    end;
+
+
+
+
+    // ============================================================
+    // HandleBlockedOrMissingItem
+    // Article introuvable (bloqué ou inexistant) → CODE_PR = '99'
+    // Equivalent de la branche ELSE de l'original
+    // ============================================================
+    local procedure HandleBlockedOrMissingItem(
+        var XMLRoot: XmlElement;
+        Item_Ref: Code[20];
+        CODEIMPUTATIONDMS_PR: Code[20];
+        LIGNE_DT_ID: Code[20])
+    var
+        RecItem: Record Item;
+        RecNewItem: Record Item;
+        DLTReplenishment: Codeunit "DLT Replenishment";
+        NewItemNo: Code[20];
+        ReplacementChain: Text[250];
+        Coefficient: Decimal;
+        XMLNode: XmlElement;
+        SavedTempDMS: XmlElement;
+    begin
+        // Vérifier si l'article existe mais est bloqué
+        RecItem.Reset();
+        RecItem.SetRange("No.", GetItemNo(Item_Ref));
+        RecItem.SetRange(Blocked, true);
+
+        if RecItem.FindFirst() then begin
+
+            // Article bloqué ET remplacé → CODE_PR='99' + remplaçant CODE_PR='2'
+            if RecItem."Replacement Status" = RecItem."Replacement Status"::Replaced then begin
+
+                // Ligne de l'ancien article bloqué → CODE_PR = '99'
+                AddElement(XMLRoot, 'PR', XMLNode);
+                XMLNode.SetAttribute('ReferencePR', Item_Ref);
+                XMLNode.SetAttribute('CODE_PR', '99');
+                XMLNode.SetAttribute('idStockDMS', 'MAG_LB');
+                XMLNode.SetAttribute('LibellePR', '');
+                XMLNode.SetAttribute('LieuDeStockage', '');
+                XMLNode.SetAttribute('QuantiteDisponible', '0.00');
+                XMLNode.SetAttribute('QuantiteEnCommande', '0.00');
+                XMLNode.SetAttribute('QuantiteReserveeSurLeStock', '0.00');
+                XMLNode.SetAttribute('ReferencePRInitial', '');
+                XMLNode.SetAttribute('WR_STOCK_PLACE', '');
+                XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+
+                // Chercher le remplaçant → CODE_PR = '2'
+                ReplacementChain := '';
+                NewItemNo := DLTReplenishment.GetLastReplacement(
+                    0, RecItem."No.", '', ReplacementChain, false);
+
+                if (NewItemNo <> '') and RecNewItem.Get(NewItemNo) then begin
+                    Coefficient := GetReplacementCoefficient(
+                        DLTReplenishment, RecItem."No.", NewItemNo);
+
+                    SavedTempDMS := XmlElement.Create('DMS');
+                    AddPRLineAllLocations(
+                        SavedTempDMS, RecNewItem, Item_Ref,
+                        '2', RecItem."No.", Coefficient, LIGNE_DT_ID);
+                    MoveChildrenTo(SavedTempDMS, XMLRoot);
+
+                    SavedTempDMS := XmlElement.Create('DMS');
+                    AddPRLineAllLocations(
+                        SavedTempDMS, RecNewItem, Item_Ref,
+                        '2', RecItem."No.", Coefficient, LIGNE_DT_ID);
+                    LZRF46T23V1(XMLRoot, SavedTempDMS, CODEIMPUTATIONDMS_PR);
+                end;
+
+            end else begin
+                // Article bloqué sans remplacement → CODE_PR = '99'
+                AddElement(XMLRoot, 'PR', XMLNode);
+                XMLNode.SetAttribute('ReferencePR', Item_Ref);
+                XMLNode.SetAttribute('CODE_PR', '99');
+                XMLNode.SetAttribute('idStockDMS', 'MAG_LB');
+                XMLNode.SetAttribute('LibellePR', '');
+                XMLNode.SetAttribute('LieuDeStockage', '');
+                XMLNode.SetAttribute('QuantiteDisponible', '0.00');
+                XMLNode.SetAttribute('QuantiteEnCommande', '0.00');
+                XMLNode.SetAttribute('QuantiteReserveeSurLeStock', '0.00');
+                XMLNode.SetAttribute('ReferencePRInitial', '');
+                XMLNode.SetAttribute('WR_STOCK_PLACE', '');
+                XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+            end;
+
+        end else begin
+            // Article inexistant → CODE_PR = '99'
+            AddElement(XMLRoot, 'PR', XMLNode);
+            XMLNode.SetAttribute('ReferencePR', Item_Ref);
+            XMLNode.SetAttribute('CODE_PR', '99');
+            XMLNode.SetAttribute('idStockDMS', 'MAG_LB');
+            XMLNode.SetAttribute('LibellePR', '');
+            XMLNode.SetAttribute('LieuDeStockage', '');
+            XMLNode.SetAttribute('QuantiteDisponible', '0.00');
+            XMLNode.SetAttribute('QuantiteEnCommande', '0.00');
+            XMLNode.SetAttribute('QuantiteReserveeSurLeStock', '0.00');
+            XMLNode.SetAttribute('ReferencePRInitial', '');
+            XMLNode.SetAttribute('WR_STOCK_PLACE', '');
+            XMLNode.SetAttribute('LIGNE_DT_ID', LIGNE_DT_ID);
+        end;
+    end;
+
+
+    // ────────────────────────────────────────────────────────────
+    //  AddPRLine  –  Nœud PR avec stock par location
+    //  idStockDMS = code location réel  |  fallback 'MAG_LB'
+    // ────────────────────────────────────────────────────────────
+    local procedure AddPRLine(
+        var XMLRoot: XmlElement;
+        RecItem: Record Item;
+        Item_Ref: Code[20];
+        CodePR: Code[10];
+        ReferenceInitial: Code[20];
+        Coefficient: Decimal): XmlElement // retourne le node créé
+    var
+        RecItemLedger: Record "Item Ledger Entry";
+        XMLNodeLocal: XmlElement;
+    begin
+        RecItemLedger.Reset();
+        RecItemLedger.SetRange("Item No.", RecItem."No.");
+        //RecItemLedger.SetFilter("Remaining Quantity", '<>0');
+        RecItemLedger.SetRange("DLT Exclude From Inventory", false);
+        if RecItemLedger.FindSet() then begin
+            repeat
+                AddElement(XMLRoot, 'PR', XMLNodeLocal);
+                FillPRAttributes(
+                    XMLNodeLocal,
+                    RecItem,
+                    RecItemLedger."Location Code",
+                    RecItemLedger."Remaining Quantity",
+                    CodePR,
+                    ReferenceInitial,
+                    Coefficient);
+            until RecItemLedger.Next() = 0;
+        end else begin
+            AddElement(XMLRoot, 'PR', XMLNodeLocal);
+            FillPRAttributes(
+                XMLNodeLocal,
+                RecItem,
+                'MAG_LB',
+                0,
+                CodePR,
+                ReferenceInitial,
+                Coefficient);
+        end;
+
+        exit(XMLNodeLocal); // retourne le dernier node créé
+    end;
+
+    local procedure FillPRAttributes(var XMLNode: XmlElement; RecItem: Record Item; Location: Code[20]; Qty: Decimal; CodePR: Code[10]; RefInit: Code[20]; Coeff: Decimal)
+    begin
+        XMLNode.SetAttribute('ReferencePR', SetItemNo(RecItem."No."));
+        XMLNode.SetAttribute('CODE_PR', CodePR);
+        XMLNode.SetAttribute('idStockDMS', Location);
+        XMLNode.SetAttribute('LibellePR', RecItem.Description);
+        XMLNode.SetAttribute('LieuDeStockage', Location);
+        XMLNode.SetAttribute('QuantiteDisponible', Format(Qty, 0, '<Precision,2:2><Standard Format,2>'));
+        XMLNode.SetAttribute('QuantiteEnCommande', Format(RecItem."Qty. on Sales Order", 0, '<Precision,2:2><Standard Format,2>'));
+        XMLNode.SetAttribute('QuantiteReserveeSurLeStock', Format(RecItem."Reserved Qty. on Inventory", 0, '<Precision,2:2><Standard Format,2>'));
+        XMLNode.SetAttribute('ReferencePRInitial', RefInit);
+
+        if Coeff <> 0 then
+            XMLNode.SetAttribute('CoefficientDeRemplacement', Format(Coeff, 0, '<Precision,2:2><Standard Format,2>'));
+    end;
+    // ────────────────────────────────────────────────────────────
+    //  AddGhostLine  –  Nœud PR vide CODE_PR = '99'
+    // ────────────────────────────────────────────────────────────
+    local procedure AddGhostLine(
+        var XMLRoot: XmlElement;
+        var XMLNode: XmlElement;
+        Item_Ref: Code[20])
+    begin
+        AddElement(XMLRoot, 'PR', XMLNode);
+        XMLNode.SetAttribute('ReferencePR', Item_Ref);
+        XMLNode.SetAttribute('CODE_PR', '99');
+        XMLNode.SetAttribute('idStockDMS', 'MAG_LB');
+        XMLNode.SetAttribute('LibellePR', '');
+        XMLNode.SetAttribute('LieuDeStockage', '');
+        XMLNode.SetAttribute('QuantiteDisponible', '0.00');
+        XMLNode.SetAttribute('QuantiteEnCommande', '0.00');
+        XMLNode.SetAttribute('QuantiteUV', '');
+        XMLNode.SetAttribute('QuantiteReserveeSurLeStock', '0.00');
+        XMLNode.SetAttribute('ReferencePRInitial', '');
+        XMLNode.SetAttribute('WR_STOCK_PLACE', '');
+    end;
+
+
+    // ────────────────────────────────────────────────────────────
+    //  GetReplacementCoefficient  –  via DLT Replenishment
+    //  Adapter selon les méthodes exposées par votre codeunit
+    // ────────────────────────────────────────────────────────────
+    local procedure GetReplacementCoefficient(
+        var DLTReplenishment: Codeunit "DLT Replenishment";
+        OldItemNo: Code[20];
+        NewItemNo: Code[20]): Decimal
+    var
+        Coefficient: Decimal;
+    begin
+        // Adapter selon la signature de votre codeunit.
+        // Si le codeunit expose GetCoefficient(OldNo, NewNo) :
+        //Coefficient := DLTReplenishment.GetCoefficient(OldItemNo, NewItemNo);
+        if Coefficient = 0 then
+            Coefficient := 1;
+        exit(Coefficient);
+    end;
+
+    local procedure AddPRPrix(
+        var XMLRoot: XmlElement;
+        ReferencePR: Code[30];
+        LigneDTId: Text[30];
+        CodeImputationDMS_PR: Code[20];
+        var RecItem: Record Item;
+        var RecCustomer: Record Customer)
+    var
+        SBManagement: Codeunit "STF Service Box Mgt";
+        TempSalesLine: Record "Sales Line" temporary;
+        NodePR: XmlElement;
+        Remise: Decimal;
+        PrixUnitaireHT: Decimal;
+        PrixUnitaireTTC: Decimal;
+        ErrorTxt: Text;
+        ItemFound: Boolean;
+    begin
+        ItemFound := false;
+
+        RecItem.Reset();
+        RecItem.SetFilter("No.", '%1', GetItemNo(ReferencePR));
+        RecItem.SetFilter(Blocked, '%1', false);
+
+        if RecItem.FindFirst() then begin
+            ItemFound := true;
+            PrixUnitaireHT := RecItem."Unit Price";
+        end else
+            PrixUnitaireHT := 0;
+
+        Remise := 0;
+
+        // 🔹 Gestion remise client même si article trouvé
+        if (CodeImputationDMS_PR <> '') and ItemFound then
+            if RecCustomer.Get(CodeImputationDMS_PR) then begin
+                TempSalesLine.Reset();
+                TempSalesLine.DeleteAll();
+
+                SBManagement.FindPriceDiscountItem(
+                    RecItem."No.", RecCustomer."No.", ErrorTxt, TempSalesLine);
+
+                if TempSalesLine.FindFirst() then begin
+                    Remise := TempSalesLine."Line Discount %";
+
+                    if TempSalesLine."Unit Price" > 0 then
+                        PrixUnitaireHT := TempSalesLine."Unit Price";
+                end;
+            end;
+
+        PrixUnitaireTTC := PrixUnitaireHT * 1.19;
+
+        // ✅ TOUJOURS créer le node
+        NodePR := XmlElement.Create('PR');
+
+        NodePR.SetAttribute('LIGNE_DT_ID', LigneDTId);
+        NodePR.SetAttribute('ReferencePR', SetItemNo(ReferencePR));
+
+        if ItemFound then
+            NodePR.SetAttribute('LibellePR', RecItem.Description)
+        else
+            NodePR.SetAttribute('LibellePR', '');
+
+        NodePR.SetAttribute('PrixUnitaireHT',
+            Format(PrixUnitaireHT, 0, '<Precision,2:2><Standard Format,2>'));
+
+        NodePR.SetAttribute('PrixUnitaireTTC',
+            Format(PrixUnitaireTTC, 0, '<Precision,2:2><Standard Format,2>'));
+
+        // ✅ IMPORTANT : TOUJOURS présents
+        NodePR.SetAttribute('PrixUV_HT', '');
+        NodePR.SetAttribute('PrixUV_TTC', '');
+
+        NodePR.SetAttribute('REMISE_DMS',
+            Format(Remise, 0, '<Precision,2:2><Standard Format,2>'));
+
+        XMLRoot.Add(NodePR);
+    end;
+
+    local procedure AddPRPrixLV(
+      var XMLRoot: XmlElement;
+      ReferencePR: Code[30];
+      LigneDTId: Text[30];
+      CodeImputationDMS_PR: Code[20];
+      var RecItem: Record Item;
+      var RecCustomer: Record Customer)
+    var
+        SBManagement: Codeunit "STF Service Box Mgt";
+        TempSalesLine: Record "Sales Line" temporary;
+        NodePR: XmlElement;
+        Remise: Decimal;
+        PrixUnitaireHT: Decimal;
+        PrixUnitaireTTC: Decimal;
+        ErrorTxt: Text;
+    begin
+        RecItem.Reset();
+        RecItem.SetFilter("No.", '%1', GetItemNo(ReferencePR));
+        RecItem.SetFilter(Blocked, '%1', false);
+
+        // ✅ Si article non trouvé → ne rien émettre, LZRF46 ne sera pas ajouté
+        if not RecItem.FindFirst() then
+            exit;
+
+        Remise := 0;
+        PrixUnitaireHT := RecItem."Unit Price";
+
+        if CodeImputationDMS_PR <> '' then
+            if RecCustomer.Get(CodeImputationDMS_PR) then begin
+                TempSalesLine.Reset();
+                TempSalesLine.DeleteAll();
+                SBManagement.FindPriceDiscountItem(
+                    RecItem."No.", RecCustomer."No.", ErrorTxt, TempSalesLine);
+                if TempSalesLine.FindFirst() then begin
+                    Remise := TempSalesLine."Line Discount %";
+                    if TempSalesLine."Unit Price" > 0 then
+                        PrixUnitaireHT := TempSalesLine."Unit Price";
+                end;
+            end;
+
+        PrixUnitaireTTC := PrixUnitaireHT * 1.19;
+
+        NodePR := XmlElement.Create('PR');
+        NodePR.SetAttribute('LIGNE_DT_ID', LigneDTId);
+        NodePR.SetAttribute('ReferencePR', SetItemNo(ReferencePR));
+        NodePR.SetAttribute('LibellePR', RecItem.Description);
+        NodePR.SetAttribute('PrixUnitaireHT',
+            Format(PrixUnitaireHT, 0, '<Precision,2:2><Standard Format,2>'));
+        NodePR.SetAttribute('PrixUnitaireTTC',
+            Format(PrixUnitaireTTC, 0, '<Precision,2:2><Standard Format,2>'));
+        NodePR.SetAttribute('PrixUV_HT', '');
+        NodePR.SetAttribute('PrixUV_TTC', '');
+        NodePR.SetAttribute('REMISE_DMS',
+            Format(Remise, 0, '<Precision,2:2><Standard Format,2>'));
+        XMLRoot.Add(NodePR);
+    end;
+
+
+    // ────────────────────────────────────────────────────────────
+    //  CheckCustomerByTypeImputation
+    // ────────────────────────────────────────────────────────────
+    local procedure CheckCustomerByTypeImputation(lTypeImputation: Text[30]; var lClient: Code[20])
+    var
+        SBOXSetup: Record "STF Servicebox Setup";
+    begin
+        if not SBOXSetup.Get() then exit;
+
+        case lTypeImputation of
+            Format(SBOXSetup."Customer Imputation Code"):
+                begin
+                    // Pour le client standard, on ne remplace que s'il n'y a rien
+                    if lClient = '' then
+                        lClient := SBOXSetup."Customer Imputation Account";
+                end;
+
+            Format(SBOXSetup."Warranty Imputation Code"):
+                lClient := SBOXSetup."Warranty Imputation Account";
+
+            Format(SBOXSetup."Insurance Imputation Code"):
+                lClient := SBOXSetup."Insurance Imputation Account";
+
+            Format(SBOXSetup."Campaign Imputation Code"):
+                lClient := SBOXSetup."Campaign Imputation Account";
+
+            Format(SBOXSetup."Contract Imputation Code"):
+                lClient := SBOXSetup."Contract Imputation Account";
+
+            Format(SBOXSetup."Internal Imputation Code"):
+                lClient := SBOXSetup."Internal Imputation Account";
+            else
+                // Si le code du XML ne correspond à aucun paramétrage, on ne fait rien (exit)
+                // lClient gardera sa valeur initiale (le client du dossier).
+                exit;
+        end;
+    end;
+
+
+    procedure DeleteLDT(RecServiceHeader: Record "Service Header EDMS"; XMLNodeLDT: XmlElement)
+    var
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        RecServiceLine: Record "Service Line EDMS";
+        RecServicePackageLine: Record "Service Package Version Line";
+        SBOXPackageLine: Record "SBOX Package Line";
+        JobLineNo: Integer;
+    begin
+        // Récupérer ID ligne
+        Evaluate(JobLineNo, GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID_DMS'));
+
+        // Filtrer Job Line
+        RecServiceJobLine.Reset();
+        RecServiceJobLine.SetRange("Document Type", RecServiceHeader."Document Type");
+        RecServiceJobLine.SetRange("Document No.", RecServiceHeader."No.");
+        RecServiceJobLine.SetRange("Task No.", JobLineNo);
+
+        if not RecServiceJobLine.FindFirst() then
+            exit;
+
+        // ================================
+        // CAS 1 : LDT DE TYPE FORFAIT
+        // ================================
+        if RecServiceJobLine."Package No." <> '' then begin
+
+            // ⚠️ IMPORTANT :
+            // ❌ On NE SUPPRIME PLUS Service Package Version Line
+            // RecServicePackageLine.Delete(true);  <-- supprimé volontairement
+
+            /*
+            RecServicePackageLine.Reset();
+            RecServicePackageLine.SetRange("Document Type", RecServiceHeader."Document Type");
+            RecServicePackageLine.SetRange("Document No.", RecServiceHeader."No.");
+            RecServicePackageLine.SetRange("Make Code", RecServiceJobLine."Package Make Code");
+            RecServicePackageLine.SetRange("Package No.", RecServiceJobLine."Package No.");
+            RecServicePackageLine.SetRange("Package Version No.", RecServiceJobLine."Package Version No.");
+
+            if RecServicePackageLine.FindFirst() then
+                RecServicePackageLine.Delete(true);
+            */
+
+            // 🔹 Cas SBOX : on garde suppression ici (si métier nécessaire)
+            if RecServiceJobLine."Package Type" = RecServiceJobLine."Package Type"::SBOX then begin
+                SBOXPackageLine.Reset();
+                SBOXPackageLine.SetRange("Document Type", RecServiceHeader."Document Type");
+                SBOXPackageLine.SetRange("Document No.", RecServiceHeader."No.");
+                SBOXPackageLine.SetRange("Package No.", RecServiceJobLine."Package No.");
+                SBOXPackageLine.SetRange("Package Version No.", RecServiceJobLine."Package Version No.");
+                SBOXPackageLine.SetRange("Code Type Veh", RecServiceJobLine."SBOX CodeTypeVehicule");
+
+                if SBOXPackageLine.FindSet() then
+                    SBOXPackageLine.DeleteAll();
+            end;
+
+            // 🔹 Supprimer Job Line uniquement
+            RecServiceJobLine.Delete(true);
+
+        end else begin
+
+            // ================================
+            // CAS 2 : LDT STANDARD
+            // ================================
+            RecServiceLine.Reset();
+            RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
+            RecServiceLine.SetRange("Document No.", RecServiceHeader."No.");
+            RecServiceLine.SetRange("Line No.", JobLineNo);
+
+            if RecServiceLine.FindSet() then
+                RecServiceLine.DeleteAll();
+
+            // 🔹 Supprimer Job Line
+            RecServiceJobLine.Delete(true);
+        end;
+    end;
+
+    procedure DeleteServiceLinesFromLDT(RecServiceHeader: Record "Service Header EDMS"; JobLineNo: Integer)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+    begin
+        RecServiceLine.Reset();
+        RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
+        RecServiceLine.SetRange("Document No.", RecServiceHeader."No.");
+        RecServiceLine.SetRange("Line No.", JobLineNo);
+
+        if RecServiceLine.FindSet() then
+            RecServiceLine.DeleteAll(true);
+    end;
+
+    local procedure InsertPRServiceLineLV(
+        var RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        XMLNodePR: XmlElement)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+        RecItem: Record Item;
+        qte: Decimal;
+    begin
+        if not RecItem.Get(
+            GetItemNo(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'))) then
+            exit;
+
+        if RecItem."Inventory Posting Group" = '' then
+            exit;
+        if RecItem.Blocked then exit;
+
+        RecServiceLine.Init();
+        RecServiceLine."Document Type" := RecServiceJobLine."Document Type";
+        RecServiceLine."Document No." := RecServiceJobLine."Document No.";
+        // RecServiceLine."DLT Instruction Line" := RecServiceJobLine."Task No.";
+        RecServiceLine."Line No." := GetNextServiceLineNo(RecServiceJobLine);
+
+        RecServiceLine.Validate(Type, RecServiceLine.Type::Item);
+        RecServiceLine.Validate("No.", RecItem."No.");
+        // --- LA CORRECTION EST ICI ---
+        RecServiceLine."DLT Instruction Line" := RecServiceJobLine."Task No.";
+        // -----------------------------
+
+        /*  if Evaluate(qte,
+             ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteCommandee'), '.', ',')) then;
+         if qte = 0 then
+             if Evaluate(qte,
+                 ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'), '.', ',')) then;
+  */
+
+        qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteCommandee'));
+        if qte = 0 then
+            qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'));
+        RecServiceLine.Validate(Quantity, qte);
+        RecServiceLine.Insert(true);
+    end;
+
+    local procedure InsertPRServiceLine(
+        var RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        XMLNodePR: XmlElement)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+        RecItem: Record Item;
+        qte: Decimal;
+    begin
+        if not RecItem.Get(
+            GetItemNo(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'))) then
+            exit;
+
+        if RecItem."Inventory Posting Group" = '' then
+            exit;
+
+        if RecItem.Blocked then
+            exit;
+
+        RecServiceLine.Init();
+        RecServiceLine."Document Type" := RecServiceJobLine."Document Type";
+        RecServiceLine."Document No." := RecServiceJobLine."Document No.";
+        RecServiceLine."Line No." := GetNextServiceLineNo(RecServiceJobLine);
+
+        RecServiceLine.Validate(Type, RecServiceLine.Type::Item);
+        RecServiceLine.Validate("No.", RecItem."No.");
+
+        // [C1] Assigner AVANT Validate(Quantity) pour ne pas être écrasé
+        RecServiceLine."DLT Instruction Line" := RecServiceJobLine."Task No.";
+        RecServiceLine."Package No." := RecServiceJobLine."Package No.";
+        RecServiceLine."Package Version No." := RecServiceJobLine."Package Version No.";
+        qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteCommandee'));
+        if qte = 0 then
+            qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'));
+
+        RecServiceLine.Validate(Quantity, qte);
+        RecServiceLine.Insert(true);
+    end;
+
+    procedure EnterServLineCustomer(var ServLine2: Record "Service Line EDMS")
+    begin
+        // EnterServLinesCustomer
+        if (ServLine2."Line No." = 0) or (ServLine2."Bill-to Customer No." = '') then
+            exit;
+
+        ServLine2.Validate("Bill-to Customer No.", ServLine2."Bill-to Customer No.");
+    end;
+    // ────────────────────────────────────────────────────────────
+    //  GetNextJobLineNo
+    //  Numéro de ligne suivant pour Service Order Symptome EDMS
+    // ────────────────────────────────────────────────────────────
+    local procedure GetNextJobLineNo(
+        RecServiceHeader: Record "Service Header EDMS"): Integer
+    var
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+    begin
+        RecServiceJobLine.Reset();
+        RecServiceJobLine.SetRange("Document Type", RecServiceHeader."Document Type");
+        RecServiceJobLine.SetRange("Document No.", RecServiceHeader."No.");
+        if RecServiceJobLine.FindLast() then
+            exit(RecServiceJobLine."Task No." + 10000)
+        else
+            exit(10000);
+    end;
+
+    /*********************************************************************/
+    local procedure InsertMOServiceLine(
+        var RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        XMLNodeMO: XmlElement)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+        RecLabor: Record "Service Labor";
+        RecServiceHeader: Record "Service Header EDMS";
+        qte: Decimal;
+        QteText: Text;
+        CodeOp: Text;
+    begin
+        CodeOp := GetAttributeValue(XMLNodeMO, 'CODEOPERATION');
+
+        if not RecServiceHeader.Get(
+            RecServiceJobLine."Document Type",
+            RecServiceJobLine."Document No.") then
+            exit;
+
+        // [C3] Quantité protégée : vide, espace, ou non-parseable → 1
+        QteText := DelChr(GetAttributeValue(XMLNodeMO, 'TEMPSGLOBAL'), '=', ' ');
+        if (QteText = '') or (not Evaluate(qte, QteText)) then
+            qte := 0;
+        if qte = 0 then
+            qte := 1;
+
+        RecLabor.Reset();
+        RecLabor.SetRange("STF No.", CodeOp);
+        RecLabor.SetRange("Make Code", RecServiceHeader."Make Code");
+
+        if RecLabor.FindFirst() then begin
+
+            RecServiceLine.Init();
+            RecServiceLine."Document Type" := RecServiceJobLine."Document Type";
+            RecServiceLine."Document No." := RecServiceJobLine."Document No.";
+            RecServiceLine."Line No." := GetNextServiceLineNo(RecServiceJobLine);
+
+            // [C2] Remplir tous les champs AVANT Insert(true)
+            RecServiceLine.Type := RecServiceLine.Type::Labor;
+            RecServiceLine."No." := RecLabor."No.";
+            RecServiceLine.Validate(Type, RecServiceLine.Type::Labor);
+            RecServiceLine.Validate("No.", RecLabor."No.");
+            RecServiceLine.Validate(Quantity, qte);
+            RecServiceLine.Validate("Unit Price",
+                ParseDecimal(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO')));
+            RecServiceLine."DLT Instruction Line" := RecServiceJobLine."Task No.";
+            RecServiceLine."Package No." := RecServiceJobLine."Package No.";
+            RecServiceLine."Package Version No." := RecServiceJobLine."Package Version No.";
+
+            RecServiceLine.Insert(true);  // [C2] Insert en DERNIER
+            RecServiceLine.Modify(true);
+
+        end else begin
+
+            eDMSSetup.Get();
+            if eDMSSetup."Default MO" = '' then
+                exit;
+
+            RecServiceLine.Init();
+            RecServiceLine."Document Type" := RecServiceJobLine."Document Type";
+            RecServiceLine."Document No." := RecServiceJobLine."Document No.";
+            RecServiceLine."Line No." := GetNextServiceLineNo(RecServiceJobLine);
+
+            // [C2] Idem : tout remplir AVANT Insert(true)
+            RecServiceLine.Validate(Type, RecServiceLine.Type::Labor);
+            RecServiceLine.Validate("No.", eDMSSetup."Default MO");
+            RecServiceLine.Validate(Quantity, qte);
+            RecServiceLine.Validate("Unit Price",
+                ParseDecimal(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO')));
+            RecServiceLine."DLT Instruction Line" := RecServiceJobLine."Task No.";
+            RecServiceLine."SBOX MO" := CodeOp;
+            RecServiceLine."Package No." := RecServiceJobLine."Package No.";
+            RecServiceLine."Package Version No." := RecServiceJobLine."Package Version No.";
+
+            RecServiceLine.Insert(true);  // [C2] Insert en DERNIER
+            RecServiceLine.Modify(true);
+        end;
+    end;
+
+
+    local procedure InsertMOServiceLineLV(
+           var RecServiceJobLine: Record "Service Order Symptome  EDMS";
+           XMLNodeMO: XmlElement)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+        RecLabor: Record "Service Labor";
+        RecServiceHeader: Record "Service Header EDMS";
+        qte: Decimal;
+        Montant: Decimal;
+        CodeOp: Text;
+        QteText: Text;
+    begin
+        CodeOp := GetAttributeValue(XMLNodeMO, 'CODEOPERATION');
+
+        // 1. Récupérer l'entête pour avoir le "Make Code" (Marque)
+        if not RecServiceHeader.Get(RecServiceJobLine."Document Type", RecServiceJobLine."Document No.") then
+            exit;
+
+        // 2. Préparation de la quantité (Correction du bug 0.10 -> 10)
+        QteText := GetAttributeValue(XMLNodeMO, 'TEMPSGLOBAL');
+        QteText := DelChr(QteText, '=', ' ');
+
+        if not Evaluate(qte, QteText) then
+            qte := 0;
+
+        if qte = 0 then
+            qte := 1;
+
+        // 3. Recherche de la MO par "STF No." ET "Make Code"
+        RecLabor.Reset();
+        RecLabor.SetRange("STF No.", CodeOp);
+        RecLabor.SetRange("Make Code", RecServiceHeader."Make Code");
+
+        if RecLabor.FindFirst() then begin
+            RecServiceLine.Init();
+            RecServiceLine.Validate("Document Type", RecServiceJobLine."Document Type");
+            RecServiceLine.Validate("Document No.", RecServiceJobLine."Document No.");
+            RecServiceLine.Validate("Line No.", GetNextServiceLineNo(RecServiceJobLine));
+            RecServiceLine.Insert(true);
+
+            RecServiceLine.Validate(Type, RecServiceLine.Type::Labor);
+            RecServiceLine.Validate("No.", RecLabor."No."); // Utilise le No. interne BC
+
+            // On applique la quantité corrigée
+            /*   if Evaluate(qte,
+         ConvertStr(GetAttributeValue(XMLNodeMO, 'QuantiteCommandee'), '.', ',')) then;
+     if qte = 0 then
+         if Evaluate(qte,
+             ConvertStr(GetAttributeValue(XMLNodeMO, 'QuantiteEnCommande'), '.', ',')) then;
+*/
+            RecServiceLine.Validate(Quantity, qte);
+
+            /*  if Evaluate(Montant, ConvertStr(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO'), '.', ',')) then
+                 RecServiceLine.Validate("Unit Price", Montant); */
+            RecServiceLine.Validate("Unit Price", ParseDecimal(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO')));
+
+
+            RecServiceLine.Validate("DLT Instruction Line", RecServiceJobLine."Task No.");
+            RecServiceLine.Modify(true);
+
+        end else begin
+            // Fallback : MO par défaut si pas trouvé pour cette marque
+            eDMSSetup.Get();
+            if eDMSSetup."Default MO" <> '' then begin
+                RecServiceLine.Init();
+                RecServiceLine.Validate("Document Type", RecServiceJobLine."Document Type");
+                RecServiceLine.Validate("Document No.", RecServiceJobLine."Document No.");
+                RecServiceLine.Validate("Line No.", GetNextServiceLineNo(RecServiceJobLine));
+                RecServiceLine.Insert(true);
+
+                RecServiceLine.Validate(Type, RecServiceLine.Type::Labor);
+                RecServiceLine.Validate("No.", eDMSSetup."Default MO");
+
+                RecServiceLine.Validate(Quantity, qte);
+                /* if Evaluate(Montant, ConvertStr(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO'), '.', ',')) then
+                    RecServiceLine.Validate("Unit Price", Montant);
+ */
+                RecServiceLine.Validate("Unit Price", ParseDecimal(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO')));
+
+                RecServiceLine.Validate("DLT Instruction Line", RecServiceJobLine."Task No.");
+                RecServiceLine."SBOX MO" := CodeOp;
+                RecServiceLine.Modify(true);
+            end;
+        end;
+    end;
+
+
+
+    // ✅ Remplace ta ligne par ceci :
+    local procedure ParseDecimal(RawValue: Text): Decimal
+    var
+        Montant: Decimal;
+        CleanValue: Text;
+    begin
+        CleanValue := RawValue;
+        // Normalise : remplace toujours la virgule par rien (séparateur milliers)
+        // et le point par le séparateur décimal système
+        CleanValue := ConvertStr(CleanValue, ',', '.');  // force le point comme décimal
+        if Evaluate(Montant, CleanValue, 9) then  // format 9 = invariant culture (point décimal)
+            exit(Montant);
+        exit(0);
+    end;
+
+
+    local procedure FormatDecimalXML(Value: Decimal): Text
+    var
+        TxtValue: Text;
+    begin
+        // Format décimal avec 2 chiffres après la virgule
+        TxtValue := Format(Value, 0, '<Precision,2:2><Standard Format,0>');
+
+        // Remplacer la virgule par un point
+        TxtValue := ConvertStr(TxtValue, ',', '.');
+
+        exit(TxtValue);
+    end;
+
+    procedure UpdateLDT(
+       var RecServiceHeader: Record "Service Header EDMS";
+       XMLNodeLDT: XmlElement;
+       var XMLRoot: XmlElement)
+    var
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        RecServiceLine: Record "Service Line EDMS";
+        XMLNodesPR: XmlNodeList;
+        XMLNodesMO: XmlNodeList;
+        XMLNodePR_Temp: XmlNode;
+        XMLNodeMO_Temp: XmlNode;
+        TmpNode: XmlElement;
+
+        LigneDT_ID: Text;
+        LigneDT_ID_DMS: Text;
+        IDFORFAIT: Code[20];
+        TypeForfait: Text;
+        JobLineNo: Integer;
+        //qte: Decimal;
+        j: Integer;
+    begin
+        // =========================
+        // 1. Lecture XML
+        // =========================
+        LigneDT_ID := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+        LigneDT_ID_DMS := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID_DMS');
+        IDFORFAIT := CopyStr(GetAttributeValue(XMLNodeLDT, 'IDFORFAIT'), 1, 20);
+        TypeForfait := GetAttributeValue(XMLNodeLDT, 'TYPEFORFAIT');
+
+        if not Evaluate(JobLineNo, LigneDT_ID_DMS) then begin
+            InsertLDT(RecServiceHeader, XMLNodeLDT, XMLRoot);
+            exit;
+        end;
+
+        // =========================
+        // 2. Recherche LDT existante
+        // =========================
+        RecServiceJobLine.Reset();
+        RecServiceJobLine.SetRange("Document Type", RecServiceHeader."Document Type");
+        RecServiceJobLine.SetRange("Document No.", RecServiceHeader."No.");
+        RecServiceJobLine.SetRange("Task No.", JobLineNo);
+
+        if not RecServiceJobLine.FindFirst() then begin
+            InsertLDT(RecServiceHeader, XMLNodeLDT, XMLRoot);
+            exit;
+        end;
+
+        // =========================
+        // 3. CAS 1 : SUPPRESSION FORFAIT
+        // =========================
+        if (RecServiceJobLine."Package No." <> '') and (IDFORFAIT = '') then begin
+
+            ClearServiceLines(RecServiceHeader, JobLineNo);
+
+            RecServiceJobLine.Validate("Package No.", '');
+            RecServiceJobLine.Modify(true);
+
+            HandlePRMO(RecServiceJobLine, XMLNodeLDT);
+        end
+
+        // =========================
+        // 4. CAS 2 : AJOUT FORFAIT
+        // =========================
+        else if (RecServiceJobLine."Package No." = '') and (IDFORFAIT <> '') then begin
+
+            ClearServiceLines(RecServiceHeader, JobLineNo);
+
+            RecServiceJobLine.Validate("Package No.", IDFORFAIT);
+            RecServiceJobLine.Validate("Package Version No.", 10000);
+            RecServiceJobLine.Modify(true);
+
+            RecServiceJobLine.InsertSPLineNew();
+        end
+
+        // =========================
+        // 5. CAS 3 : CHANGEMENT FORFAIT
+        // =========================
+        else if (RecServiceJobLine."Package No." <> '') and (IDFORFAIT <> '') and
+                (RecServiceJobLine."Package No." <> IDFORFAIT) then begin
+
+            ClearServiceLines(RecServiceHeader, JobLineNo);
+
+            RecServiceJobLine.Validate("Package No.", IDFORFAIT);
+            RecServiceJobLine.Validate("Package Version No.", 10000);
+            RecServiceJobLine.Modify(true);
+
+            RecServiceJobLine.InsertSPLineNew();
+        end
+
+        // =========================
+        // 6. CAS 4 : FORFAIT SBOX
+        // =========================
+        else if (TypeForfait = '1') and (IDFORFAIT <> '') then begin
+
+            ClearServiceLines(RecServiceHeader, JobLineNo);
+
+            UpdateSBoxPackageLines(IDFORFAIT, 10000, XMLNodeLDT);
+
+            RecServiceJobLine.Validate("Package No.", IDFORFAIT);
+            RecServiceJobLine.Validate("Package Version No.", 10000);
+            RecServiceJobLine.Modify(true);
+
+            RecServiceJobLine.InsertSPLineNew();
+        end
+
+        // =========================
+        // 7. CAS 5 : SANS FORFAIT
+        // =========================
+        else begin
+            HandlePRMO(RecServiceJobLine, XMLNodeLDT);
+        end;
+
+        // =========================
+        // 8. Réponse XML
+        // =========================
+        AddElement(XMLRoot, 'LDT', TmpNode);
+        AddAttribute(TmpNode, 'LIGNE_DT_ID', LigneDT_ID);
+        AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+    end;
+
+    local procedure ClearServiceLines(RecServiceHeader: Record "Service Header EDMS"; JobLineNo: Integer)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+    begin
+        RecServiceLine.Reset();
+        RecServiceLine.SetRange("Document Type", RecServiceHeader."Document Type");
+        RecServiceLine.SetRange("Document No.", RecServiceHeader."No.");
+        RecServiceLine.SetRange("DLT Instruction Line", JobLineNo);
+
+        if not RecServiceLine.IsEmpty then
+            RecServiceLine.DeleteAll(true);
+    end;
+
+    local procedure HandlePRMO(
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        XMLNodeLDT: XmlElement)
+    var
+        XMLNodesPR: XmlNodeList;
+        XMLNodesMO: XmlNodeList;
+        XMLNodePR_Temp: XmlNode;
+        XMLNodeMO_Temp: XmlNode;
+        j: Integer;
+    begin
+        if XMLNodeLDT.SelectNodes('PR', XMLNodesPR) then
+            for j := 1 to XMLNodesPR.Count() do begin
+                XMLNodesPR.Get(j, XMLNodePR_Temp);
+                UpdateOrInsertPRLine(RecServiceJobLine, XMLNodePR_Temp.AsXmlElement());
+            end;
+
+        if XMLNodeLDT.SelectNodes('MO', XMLNodesMO) then
+            for j := 1 to XMLNodesMO.Count() do begin
+                XMLNodesMO.Get(j, XMLNodeMO_Temp);
+                UpdateOrInsertMOLine(RecServiceJobLine, XMLNodeMO_Temp.AsXmlElement());
+            end;
+    end;
+
+    local procedure UpdateOrInsertPRLine(
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        XMLNodePR: XmlElement)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+        ItemNo: Code[20];
+        qte: Decimal;
+    begin
+        ItemNo := GetItemNo(GetAttributeValue(XMLNodePR, 'REFERENCE_PR'));
+        if ItemNo = '' then exit;
+
+        // 1. Chercher si cette pièce existe déjà sous ce symptôme (Task No.)
+        RecServiceLine.Reset();
+        RecServiceLine.SetRange("Document Type", RecServiceJobLine."Document Type");
+        RecServiceLine.SetRange("Document No.", RecServiceJobLine."Document No.");
+        RecServiceLine.SetRange(Type, RecServiceLine.Type::Item);
+        RecServiceLine.SetRange("No.", ItemNo);
+        RecServiceLine.SetRange("DLT Instruction Line", RecServiceJobLine."Task No.");
+
+        if RecServiceLine.FindFirst() then begin
+            // 2. MISE À JOUR : On récupère la quantité du XML
+            //if Evaluate(qte, ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'), '.', ',')) then begin
+            // Option A : Remplacer la quantité (Standard SBox) */
+
+            // qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteCommandee'));
+            //if qte = 0 then
+            qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'));
+            RecServiceLine.Validate(Quantity, qte);
+
+            // Option B : Accumuler (Si vous voulez additionner au lieu de remplacer, utilisez :)
+            // RecServiceLine.Validate(Quantity, RecServiceLine.Quantity + qte);
+
+            RecServiceLine.Modify(true);
+            //end;
+        end else begin
+            // 3. INSERTION : La pièce n'existe pas encore pour cette tâche
+            InsertPRServiceLine(RecServiceJobLine, XMLNodePR);
+        end;
+    end;
+
+    local procedure UpdateOrInsertMOLine(
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        XMLNodeMO: XmlElement)
+    var
+        RecServiceLine: Record "Service Line EDMS";
+        OpCode: Code[20];
+        qte: Decimal;
+    begin
+        OpCode := CopyStr(GetAttributeValue(XMLNodeMO, 'CODEOPERATION'), 1, 20);
+        if OpCode = '' then exit;
+
+        // 1. Chercher si cette opération de MO existe déjà pour ce symptôme précis
+        RecServiceLine.Reset();
+        RecServiceLine.SetRange("Document Type", RecServiceJobLine."Document Type");
+        RecServiceLine.SetRange("Document No.", RecServiceJobLine."Document No.");
+        RecServiceLine.SetRange(Type, RecServiceLine.Type::Labor);
+        RecServiceLine.SetRange("No.", OpCode);
+        RecServiceLine.SetRange("DLT Instruction Line", RecServiceJobLine."Task No.");
+
+        if RecServiceLine.FindFirst() then begin
+            // 2. MISE À JOUR : On remplace la quantité par celle du XML
+            if Evaluate(qte, ConvertStr(GetAttributeValue(XMLNodeMO, 'QUANTITE'), '.', ',')) then begin
+                RecServiceLine.Validate(Quantity, qte);
+                RecServiceLine.Modify(true);
+            end;
+        end else begin
+            // 3. INSERTION : L'opération n'existe pas, on l'ajoute
+            InsertMOServiceLine(RecServiceJobLine, XMLNodeMO);
+        end;
+    end;
+
+
+    local procedure UpdateSBoxPackageLines(
+        PackageNo: Code[20];
+        VersionNo: Integer;
+        XMLNodeLDT: XmlElement)
+    var
+        PkgLine: Record "Service Package Version Line"; // Table 25006136
+        XMLNodesPR: XmlNodeList;
+        XMLNodesMO: XmlNodeList;
+        XMLNode_Temp: XmlNode;
+        j: Integer;
+        NextLineNo: Integer;
+    begin
+        // 1. Supprimer l'ancienne recette pour cette version spécifique Peugeot
+        PkgLine.SetRange("Package No.", PackageNo);
+        PkgLine.SetRange("Version No.", VersionNo);
+        if not PkgLine.IsEmpty then
+            PkgLine.DeleteAll(true);
+
+        NextLineNo := 10000;
+
+        // 2. Insérer les Pièces (PR) du XML
+        if XMLNodeLDT.SelectNodes('PR', XMLNodesPR) then
+            for j := 1 to XMLNodesPR.Count() do begin
+                XMLNodesPR.Get(j, XMLNode_Temp);
+                PkgLine.Init();
+                PkgLine."Package No." := CopyStr(PackageNo, 1, 14);
+                ;
+                PkgLine."Version No." := VersionNo;
+                PkgLine."Line No." := NextLineNo;
+                PkgLine.Type := PkgLine.Type::Item;
+                PkgLine.Validate("No.", GetItemNo(GetAttributeValue(XMLNode_Temp.AsXmlElement(), 'REFERENCE_PR')));
+
+                // Gestion quantité
+                EvaluateQuantity(PkgLine, GetAttributeValue(XMLNode_Temp.AsXmlElement(), 'QuantiteEnCommande'));
+
+                PkgLine.Insert(true);
+                NextLineNo += 10000;
+            end;
+
+        // 3. Insérer la Main d'œuvre (MO) du XML
+        if XMLNodeLDT.SelectNodes('MO', XMLNodesMO) then
+            for j := 1 to XMLNodesMO.Count() do begin
+                XMLNodesMO.Get(j, XMLNode_Temp);
+                PkgLine.Init();
+                PkgLine."Package No." := CopyStr(PackageNo, 1, 14);
+                PkgLine."Version No." := VersionNo;
+                PkgLine."Line No." := NextLineNo;
+                PkgLine.Type := PkgLine.Type::Labor;
+                PkgLine.Validate("No.", GetAttributeValue(XMLNode_Temp.AsXmlElement(), 'CODEOPERATION'));
+
+                // Gestion quantité
+                EvaluateQuantity(PkgLine, GetAttributeValue(XMLNode_Temp.AsXmlElement(), 'QUANTITE'));
+
+                PkgLine.Insert(true);
+                NextLineNo += 10000;
+            end;
+    end;
+
+    local procedure EvaluateQuantity(var PkgLine: Record "Service Package Version Line"; QtyString: Text)
+    var
+        DecValue: Decimal;
+    begin
+        if QtyString = '' then begin
+            PkgLine.Validate(Quantity, 0);
+            exit;
+        end;
+
+        // Remplace le point par la virgule (ou vice versa selon la configuration régionale du serveur)
+        // pour s'assurer que EVALUATE ne provoque pas d'erreur de format.
+        if Evaluate(DecValue, ConvertStr(QtyString, '.', ',')) then
+            PkgLine.Validate(Quantity, DecValue)
+        else
+            // Si l'évaluation échoue avec la virgule, on tente sans conversion (format anglo-saxon)
+            if Evaluate(DecValue, QtyString) then
+                PkgLine.Validate(Quantity, DecValue)
+            else
+                PkgLine.Validate(Quantity, 0); // Valeur par défaut en cas d'erreur totale
+    end;
+    //////////////////////
+
+    procedure LZRF10T13V1LV(TempRoot: XmlElement; XMLNodeReq: XmlElement; RqType: Text)
+    var
+        XMLRoot, XMLNodeCustomer, XMLNodeVehicle : XmlElement;
+        XMLNodeServicePAD: XmlElement;
+        XmlNodesLDT, XMLNodesPR : XmlNodeList;
+        XMLNodesPADANOMALIE, XMLNodesPADCATEGORIECV : XmlNodeList;
+        XMLNodesPADCONTROLEVISUEL, XMLNodesPADCHOIX : XmlNodeList;
+        RecSalesHeader: Record "Sales Header";
+        RecServiceHeader: Record "Service Header EDMS";
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        RecCustomer: Record Customer;
+        RecVehicle: Record Vehicle;
+        RecLocation: Record Location;
+        RecServiceLocation: Record Location;
+        eDMSSetup: Record "STF Servicebox Setup";
+        Kilometrage: Decimal;
+        i, j, PADi, PADj, PADk : Integer;
+        JobLineNo: Integer;
+        NumPost: Code[10];
+        lREMISEDOSSIER, lPRIXDOSSIER_TTC : Decimal;
+        lREMISELDT, lREMISELDTTOT, lPRIXLDTTTC, lPRIXLDTTTCTOT : Decimal;
+        lTYPEREMISE: Integer;
+        lCodeUpdateDelete: Text[30];
+        lDAY, lMonth, lYEAR : Integer;
+        TmpNode: XmlElement;
+        XMLNodeLDT_Temp: XmlNode;
+        XMLNodePR_Temp: XmlNode;
+        XMLNodePAD_Temp: XmlNode;
+        XMLNodeCV_Temp: XmlNode;
+        XMLNodeCH_Temp: XmlNode;
+        XMLNodeServicePAD_Node: XmlNode;
+        LigneDT_ID: Text;
+        Text0001: Label 'L''utilisateur utilisé n''est pas paramétré dans Business Central.';
+        Text0002: Label 'Merci de renseigner la limite de crédit dans le champ Observation.';
+        Text0003: Label 'Transfert du dossier réussi.';
+        Text0004: Label 'Mise à jour du dossier réussi.';
+        Text0005: Label 'L''utilisateur utilisé n''a pas les droits pour modifier les tâches atelier.';
+        Text0006: Label 'L''utilisateur utilisé n''a pas les droits pour créer un OR.';
+        Text0007: Label 'Merci de renseigner le client de Passage PR dans le paramétrage eDMS.';
+    begin
+        XMLRoot := XmlElement.Create('LZRF10');
+        TempRoot.Add(XMLRoot);
+
+        XMLNodeCustomer := GetChildElement(XMLNodeReq, 'CLIENT');
+        XMLNodeVehicle := GetChildElement(XMLNodeReq, 'VEHICULE');
+        XMLNodeVehicle.SelectNodes('LDT', XmlNodesLDT);
+        AddAttribute(XMLRoot, 'LDTcount', Format(XmlNodesLDT.Count()));
+
+        NumPost := GetAttributeValue(XMLNodeReq, 'NumeroPoste');
+
+        if not CheckUserSetup(GetAttributeValue(XMLNodeReq, 'ID_UTILISATEUR'), NumPost, RecLocation, RecServiceLocation) then begin
+            ErrorResponse(XMLRoot, Text0001);
+            for i := 1 to XmlNodesLDT.Count() do begin
+                XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                    GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+            end;
+            exit;
+        end;
+
+        eDMSSetup.Get();
+        if eDMSSetup.accountCustomerUpdate then
+            UpdateCustomer(XMLNodeCustomer);
+
+        // ── Remise dossier (Menu Pricing) ──────────────────────────────────────
+        if (GetAttributeValue(XMLNodeVehicle, 'REMISECLIENT') = '1') and
+            (eDMSSetup.interfaceVersion = '13') then begin
+            Evaluate(lREMISEDOSSIER,
+                ConvertStr(GetAttributeValue(XMLNodeVehicle, 'REMISEDOSSIER'), '.', ','));
+            Evaluate(lTYPEREMISE,
+                GetAttributeValue(XMLNodeVehicle, 'TYPEREMISE'));
+            Evaluate(lPRIXDOSSIER_TTC,
+                ConvertStr(GetAttributeValue(XMLNodeVehicle, 'PRIXDOSSIER_TTC'), '.', ','));
+        end;
+
+        // ── Service PAD ────────────────────────────────────────────────────────
+        if eDMSSetup.ServicePAD and (eDMSSetup.interfaceVersion = '13') then
+            if XMLNodeReq.SelectSingleNode('SERVICEPAD', XMLNodeServicePAD_Node) then begin
+                XMLNodeServicePAD := XMLNodeServicePAD_Node.AsXmlElement();
+
+                GetAttributeValue(XMLNodeServicePAD, 'NOTE');
+
+                XMLNodeServicePAD.SelectNodes('ANOMALIE', XMLNodesPADANOMALIE);
+                for PADi := 1 to XMLNodesPADANOMALIE.Count() do begin
+                    XMLNodesPADANOMALIE.Get(PADi, XMLNodePAD_Temp);
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Image');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'X');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Y');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Libelle');
+                end;
+
+                XMLNodeServicePAD.SelectNodes('CATEGORIECV', XMLNodesPADCATEGORIECV);
+                for PADi := 1 to XMLNodesPADCATEGORIECV.Count() do begin
+                    XMLNodesPADCATEGORIECV.Get(PADi, XMLNodePAD_Temp);
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Num');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Libelle');
+
+                    XMLNodePAD_Temp.AsXmlElement().SelectNodes('CONTROLEVISUEL', XMLNodesPADCONTROLEVISUEL);
+                    for PADj := 1 to XMLNodesPADCONTROLEVISUEL.Count() do begin
+                        XMLNodesPADCONTROLEVISUEL.Get(PADj, XMLNodeCV_Temp);
+                        GetAttributeValue(XMLNodeCV_Temp.AsXmlElement(), 'Libelle');
+                        GetAttributeValue(XMLNodeCV_Temp.AsXmlElement(), 'Texte');
+
+                        XMLNodeCV_Temp.AsXmlElement().SelectNodes('CHOIX', XMLNodesPADCHOIX);
+                        for PADk := 1 to XMLNodesPADCHOIX.Count() do begin
+                            XMLNodesPADCHOIX.Get(PADk, XMLNodeCH_Temp);
+                            GetAttributeValue(XMLNodeCH_Temp.AsXmlElement(), 'Libelle');
+                            GetAttributeValue(XMLNodeCH_Temp.AsXmlElement(), 'Selection');
+                        end;
+                    end;
+                end;
+            end;
+
+        // ======================================================================
+        // ORIGINEVENTE = '1' → Commande vente PR
+        // ======================================================================
+        if GetAttributeValue(XMLNodeReq, 'ORIGINEVENTE') = '1' then begin
+
+            if (GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '') or
+               (eDMSSetup.PRPassingAccount <> '') then begin
+
+                RecSalesHeader.Init();
+                RecSalesHeader."Document Type" := RecSalesHeader."Document Type"::Order;
+                RecSalesHeader."Document Profile" := RecSalesHeader."Document Profile"::"Spare Parts Trade";
+
+                if RecLocation.Code <> '' then
+                    RecSalesHeader.Validate("Location Code", RecLocation.Code);
+                RecSalesHeader.SetHideValidationDialog(true);
+
+                if GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '' then
+                    RecSalesHeader.Validate(
+                        "Sell-to Customer No.",
+                        GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID'))
+                else
+                    RecSalesHeader.Validate(
+                        "Sell-to Customer No.",
+                        eDMSSetup.PRPassingAccount);
+
+                RecSalesHeader.Validate("VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
+                RecSalesHeader."Dossier SBOX" := true;
+                RecSalesHeader.Insert(true);
+
+                if eDMSSetup."Discount allowed" and CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                    if lTYPEREMISE = 1 then
+                        RecSalesHeader.Validate("Payment Discount %", lREMISEDOSSIER)
+                    else
+                        if (lPRIXDOSSIER_TTC + lREMISEDOSSIER) > 0 then
+                            RecSalesHeader.Validate(
+                                "Payment Discount %",
+                                (lREMISEDOSSIER / (lPRIXDOSSIER_TTC + lREMISEDOSSIER)) * 100);
+                    RecSalesHeader.Modify(true);
+                end;
+
+                lREMISELDTTOT := 0;
+                lPRIXLDTTTCTOT := 0;
+
+                AddAttribute(XMLRoot, 'Code', '0');
+                AddAttribute(XMLRoot, 'TexteDMS', Text0003);
+                AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecSalesHeader."No.");
+
+                for i := 1 to XmlNodesLDT.Count() do begin
+                    XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                    LigneDT_ID := GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID');
+                    XMLNodeLDT_Temp.AsXmlElement().SelectNodes('PR', XMLNodesPR);
+
+                    for j := 1 to XMLNodesPR.Count() do begin
+                        XMLNodesPR.Get(j, XMLNodePR_Temp);
+                        if j = 1 then
+                            InsertPRSalesLineLDT(
+                                RecSalesHeader,
+                                XMLNodePR_Temp.AsXmlElement(),
+                                CopyStr(LigneDT_ID, 1, 20))
+                        else
+                            InsertPRSalesLine(
+                                RecSalesHeader,
+                                XMLNodePR_Temp.AsXmlElement(),
+                                CopyStr(LigneDT_ID, 1, 20));
+                    end;
+
+                    if eDMSSetup."Discount allowed LDT" and
+                       CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                        Evaluate(lREMISELDT,
+                            ConvertStr(GetAttributeValue(
+                                XMLNodeLDT_Temp.AsXmlElement(), 'REMISE_PRICING_LDT'), '.', ','));
+                        Evaluate(lPRIXLDTTTC,
+                            ConvertStr(GetAttributeValue(
+                                XMLNodeLDT_Temp.AsXmlElement(), 'PRIXTTC_LDT'), '.', ','));
+                        lREMISELDTTOT += lREMISELDT;
+                        lPRIXLDTTTCTOT += lPRIXLDTTTC;
+                    end;
+
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', LigneDT_ID);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', LigneDT_ID);
+                end;
+
+                if eDMSSetup."Discount allowed LDT" then begin
+                    if (lREMISELDTTOT + lPRIXLDTTTCTOT) > 0 then
+                        RecSalesHeader.Validate(
+                            "Payment Discount %",
+                            RecSalesHeader."Payment Discount %" +
+                            ((lREMISELDTTOT / (lREMISELDTTOT + lPRIXLDTTTCTOT)) * 100));
+                    RecSalesHeader.Modify(true);
+                end;
+
+            end else begin
+                ErrorResponse(XMLRoot, Text0007);
+                for i := 1 to XmlNodesLDT.Count() do begin
+                    XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                        GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                end;
+            end;
+
+            // ======================================================================
+            // ORIGINEVENTE APV → Dossier service
+            // ======================================================================
+        end else begin
+
+            if GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage') <> '' then
+                Evaluate(Kilometrage,
+                    DelChr(GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage'), '=', ' '));
+            RecVehicle.Reset();
+            RecVehicle.SetRange("VIN", GetAttributeValue(XMLNodeVehicle, 'VIN'));
+
+            if RecVehicle.FindFirst() then
+                //if RecVehicle.Get(GetAttributeValue(XMLNodeVehicle, 'VIN')) then
+                if Kilometrage > RecVehicle."Variable Field Run 1" then begin
+                    RecVehicle."Variable Field Run 1" := Kilometrage;
+                    RecVehicle.Modify(true);
+                end;
+
+            // ==================================================================
+            // Nième transfert → Mise à jour dossier existant
+            // ==================================================================
+            if GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID') <> '' then begin
+
+                if not CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                    ErrorResponse(XMLRoot, Text0005);
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                        AddElement(XMLRoot, 'LDT', TmpNode);
+                        AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                            GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                    end;
+                    exit;
+                end;
+
+                RecServiceHeader.Reset();
+                RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
+                RecServiceHeader.SetRange("No.", GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID'));
+
+                if RecServiceHeader.FindFirst() then begin
+
+                    if (GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT') <> '') and
+                       (GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT') <> '') and
+                       (GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT') <> '') then begin
+                        Evaluate(lDAY, GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT'));
+                        Evaluate(lMonth, GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT'));
+                        Evaluate(lYEAR, GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT'));
+                        RecServiceHeader."Order Date" := DMY2Date(lDAY, lMonth, lYEAR);
+                    end;
+                    RecServiceHeader.Modify(true);
+
+                    AddAttribute(XMLRoot, 'Code', '0');
+                    AddAttribute(XMLRoot, 'TexteDMS', Text0004);
+                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
+
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+
+                        eDMSSetup.Get();
+                        if eDMSSetup.interfaceVersion = '13' then
+                            lCodeUpdateDelete := 'CODEVENTILATION_LDT'
+                        else
+                            lCodeUpdateDelete := 'TYPEIMPUTATION_LDT';
+
+                        if GetAttributeValue(
+                            XMLNodeLDT_Temp.AsXmlElement(), lCodeUpdateDelete) = '99' then
+                            DeleteLDT(RecServiceHeader, XMLNodeLDT_Temp.AsXmlElement())
+
+                        else begin
+                            if GetAttributeValue(
+                                XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID_DMS') <> '' then begin
+
+                                Evaluate(JobLineNo,
+                                    GetAttributeValue(
+                                        XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID_DMS'));
+
+                                RecServiceJobLine.Reset();
+                                RecServiceJobLine.SetRange("Document Type", RecServiceHeader."Document Type");
+                                RecServiceJobLine.SetRange("Document No.", RecServiceHeader."No.");
+                                RecServiceJobLine.SetRange("Task No.", JobLineNo);
+
+                                if RecServiceJobLine.FindFirst() then
+                                    UpdateLDT(RecServiceHeader,
+                                        XMLNodeLDT_Temp.AsXmlElement(), XMLRoot)
+                                else
+                                    InsertLDT(RecServiceHeader,
+                                        XMLNodeLDT_Temp.AsXmlElement(), XMLRoot);
+
+                            end else
+                                InsertLDT(RecServiceHeader,
+                                    XMLNodeLDT_Temp.AsXmlElement(), XMLRoot);
+                        end;
+                    end;
+                end;
+
+                // ==================================================================
+                // 1er transfert → Création d'un nouveau dossier APV
+                // ==================================================================
+            end else begin
+
+                if not CheckUserPermissionAPV('APV_CREATE', RecUserSetup) then begin
+                    ErrorResponse(XMLRoot, Text0006);
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                        AddElement(XMLRoot, 'LDT', TmpNode);
+                        AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                            GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                    end;
+                    exit;
+                end;
+
+                if GetAttributeValue(XMLNodeCustomer, 'Observations') = '' then begin
+                    ErrorResponse(XMLRoot, Text0002);
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                        AddElement(XMLRoot, 'LDT', TmpNode);
+                        AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                            GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                    end;
+                    exit;
+                end;
+
+                RecServiceHeader.Init();
+                RecServiceHeader."Document Type" := RecServiceHeader."Document Type"::Order;
+                RecServiceHeader."Location Code" := RecServiceLocation.Code;
+                RecServiceHeader.Insert(true);
+                RecServiceHeader.SetHideValidationDialog(true);
+
+                if GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '' then begin
+                    if RecCustomer.Get(GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID')) then
+                        RecServiceHeader.Validate(
+                            "Sell-to Customer No.",
+                            GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID'))
+                    else
+                        RecServiceHeader.Validate(
+                            "Sell-to Customer No.",
+                            eDMSSetup."Customer Imputation Account");
+                end else
+                    RecServiceHeader.Validate(
+                        "Sell-to Customer No.",
+                        eDMSSetup."Customer Imputation Account");
+
+                RecServiceHeader.Validate(VIN, GetAttributeValue(XMLNodeVehicle, 'VIN'));
+                Evaluate(RecServiceHeader."Variable Field Run 1",
+                    DelChr(GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage'), '=', ' '));
+
+                if (GetAttributeValue(XMLNodeReq, 'JOURRDV') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'MOISRDV') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'ANNEERDV') <> '') then begin
+                    Evaluate(lDAY, GetAttributeValue(XMLNodeReq, 'JOURRDV'));
+                    Evaluate(lMonth, GetAttributeValue(XMLNodeReq, 'MOISRDV'));
+                    Evaluate(lYEAR, GetAttributeValue(XMLNodeReq, 'ANNEERDV'));
+                    RecServiceHeader."Order Date" := DMY2Date(lDAY, lMonth, lYEAR);
+                end;
+
+                if (GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT') <> '') then begin
+                    Evaluate(lDAY, GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT'));
+                    Evaluate(lMonth, GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT'));
+                    Evaluate(lYEAR, GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT'));
+                    // RecServiceHeader."Pickup Date" := DMY2Date(lDAY, lMonth, lYEAR);
+                end;
+
+                RecServiceHeader.Modify(true);
+
+                AddAttribute(XMLRoot, 'Code', '0');
+                AddAttribute(XMLRoot, 'TexteDMS', Text0003);
+                AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
+
+                for i := 1 to XmlNodesLDT.Count() do begin
+                    XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                    InsertLDT(RecServiceHeader, XMLNodeLDT_Temp.AsXmlElement(), XMLRoot);
+                end;
+            end;
+        end;
+    end;
+
+
+    procedure LZRF10T13V1(TempRoot: XmlElement; XMLNodeReq: XmlElement; RqType: Text)
+    var
+        XMLRoot, XMLNodeCustomer, XMLNodeVehicle : XmlElement;
+        XMLNodeServicePAD: XmlElement;
+        XmlNodesLDT, XMLNodesPR : XmlNodeList;
+        XMLNodesPADANOMALIE, XMLNodesPADCATEGORIECV : XmlNodeList;
+        XMLNodesPADCONTROLEVISUEL, XMLNodesPADCHOIX : XmlNodeList;
+        RecSalesHeader: Record "Sales Header";
+        RecServiceHeader: Record "Service Header EDMS";
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        RecCustomer: Record Customer;
+        RecVehicle: Record Vehicle;
+        RecLocation: Record Location;
+        RecServiceLocation: Record Location;
+        eDMSSetup: Record "STF Servicebox Setup";
+        Kilometrage: Decimal;
+        i, j, PADi, PADj, PADk : Integer;
+        JobLineNo: Integer;
+        NumPost: Code[10];
+        lREMISEDOSSIER, lPRIXDOSSIER_TTC : Decimal;
+        lREMISELDT, lREMISELDTTOT, lPRIXLDTTTC, lPRIXLDTTTCTOT : Decimal;
+        lTYPEREMISE: Integer;
+        lCodeUpdateDelete: Text[30];
+        lDAY, lMonth, lYEAR : Integer;
+        TmpNode: XmlElement;
+        XMLNodeLDT_Temp: XmlNode;
+        XMLNodePR_Temp: XmlNode;
+        XMLNodePAD_Temp: XmlNode;
+        XMLNodeCV_Temp: XmlNode;
+        XMLNodeCH_Temp: XmlNode;
+        XMLNodeServicePAD_Node: XmlNode;
+        LigneDT_ID: Text;
+
+        // ── Libellés (à valider : Text0100/0101/0102 = valeurs originales C/AL) ──
+        Text0001: Label 'L''utilisateur utilisé n''est pas paramétré dans Business Central.';
+        Text0002: Label 'Merci de renseigner la limite de crédit dans le champ Observation.';
+        Text0003: Label 'Transfert du dossier réussi.';
+        Text0004: Label 'Mise à jour du dossier réussi.';
+        Text0005: Label 'L''utilisateur utilisé n''a pas les droits pour modifier les tâches atelier.';
+        Text0006: Label 'L''utilisateur utilisé n''a pas les droits pour créer un OR.';
+        Text0007: Label 'Merci de renseigner le client de Passage PR dans le paramétrage eDMS.';
+    // [FIX-7] Vérifier que Text0100/0101/0102 dans l'original correspondent bien à :
+    //   Text0100 = permission de création APV   → 'APV_CREATE'
+    //   Text0101 = permission de modification APV → 'APV_MODIFY'
+    //   Text0102 = permission discount          → 'APV_MODIFY'  (idem ou distincte ?)
+    begin
+        XMLRoot := XmlElement.Create('LZRF10');
+        TempRoot.Add(XMLRoot);
+
+        XMLNodeCustomer := GetChildElement(XMLNodeReq, 'CLIENT');
+        XMLNodeVehicle := GetChildElement(XMLNodeReq, 'VEHICULE');
+        XMLNodeVehicle.SelectNodes('LDT', XmlNodesLDT);
+        AddAttribute(XMLRoot, 'LDTcount', Format(XmlNodesLDT.Count()));
+
+        NumPost := GetAttributeValue(XMLNodeReq, 'NumeroPoste');
+
+        // ── Vérification utilisateur ───────────────────────────────────────────
+        if not CheckUserSetup(
+            GetAttributeValue(XMLNodeReq, 'ID_UTILISATEUR'),
+            NumPost, RecLocation, RecServiceLocation) then begin
+
+            ErrorResponse(XMLRoot, Text0001);
+            for i := 1 to XmlNodesLDT.Count() do begin
+                XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                    GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+            end;
+            exit;
+        end;
+
+        eDMSSetup.Get();
+        if eDMSSetup.accountCustomerUpdate then
+            UpdateCustomer(XMLNodeCustomer);
+
+        // ── Remise dossier (Menu Pricing) ──────────────────────────────────────
+        if (GetAttributeValue(XMLNodeVehicle, 'REMISECLIENT') = '1') and
+           (eDMSSetup.interfaceVersion = '13') then begin
+            Evaluate(lREMISEDOSSIER,
+                ConvertStr(GetAttributeValue(XMLNodeVehicle, 'REMISEDOSSIER'), '.', ','));
+            Evaluate(lTYPEREMISE,
+                GetAttributeValue(XMLNodeVehicle, 'TYPEREMISE'));
+            Evaluate(lPRIXDOSSIER_TTC,
+                ConvertStr(GetAttributeValue(XMLNodeVehicle, 'PRIXDOSSIER_TTC'), '.', ','));
+        end;
+
+        // ── Service PAD ────────────────────────────────────────────────────────
+        if eDMSSetup.ServicePAD and (eDMSSetup.interfaceVersion = '13') then
+            if XMLNodeReq.SelectSingleNode('SERVICEPAD', XMLNodeServicePAD_Node) then begin
+                XMLNodeServicePAD := XMLNodeServicePAD_Node.AsXmlElement();
+                GetAttributeValue(XMLNodeServicePAD, 'NOTE');
+
+                XMLNodeServicePAD.SelectNodes('ANOMALIE', XMLNodesPADANOMALIE);
+                for PADi := 1 to XMLNodesPADANOMALIE.Count() do begin
+                    XMLNodesPADANOMALIE.Get(PADi, XMLNodePAD_Temp);
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Image');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'X');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Y');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Libelle');
+                end;
+
+                XMLNodeServicePAD.SelectNodes('CATEGORIECV', XMLNodesPADCATEGORIECV);
+                for PADi := 1 to XMLNodesPADCATEGORIECV.Count() do begin
+                    XMLNodesPADCATEGORIECV.Get(PADi, XMLNodePAD_Temp);
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Num');
+                    GetAttributeValue(XMLNodePAD_Temp.AsXmlElement(), 'Libelle');
+
+                    XMLNodePAD_Temp.AsXmlElement().SelectNodes('CONTROLEVISUEL', XMLNodesPADCONTROLEVISUEL);
+                    for PADj := 1 to XMLNodesPADCONTROLEVISUEL.Count() do begin
+                        XMLNodesPADCONTROLEVISUEL.Get(PADj, XMLNodeCV_Temp);
+                        GetAttributeValue(XMLNodeCV_Temp.AsXmlElement(), 'Libelle');
+                        GetAttributeValue(XMLNodeCV_Temp.AsXmlElement(), 'Texte');
+
+                        XMLNodeCV_Temp.AsXmlElement().SelectNodes('CHOIX', XMLNodesPADCHOIX);
+                        for PADk := 1 to XMLNodesPADCHOIX.Count() do begin
+                            XMLNodesPADCHOIX.Get(PADk, XMLNodeCH_Temp);
+                            GetAttributeValue(XMLNodeCH_Temp.AsXmlElement(), 'Libelle');
+                            GetAttributeValue(XMLNodeCH_Temp.AsXmlElement(), 'Selection');
+                        end;
+                    end;
+                end;
+            end;
+
+        // ======================================================================
+        // ORIGINEVENTE = '1' → Commande vente PR
+        // ======================================================================
+        if GetAttributeValue(XMLNodeReq, 'ORIGINEVENTE') = '1' then begin
+
+            if (GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '') or
+               (eDMSSetup.PRPassingAccount <> '') then begin
+
+                RecSalesHeader.Init();
+                RecSalesHeader."Document Type" := RecSalesHeader."Document Type"::Order;
+                RecSalesHeader."Document Profile" := RecSalesHeader."Document Profile"::"Spare Parts Trade";
+
+                // [FIX-2] Branch Code et Department Code (présents dans l'original C/AL)
+                if RecLocation.Code <> '' then begin
+                    RecSalesHeader.Validate("Location Code", RecLocation.Code);
+                    // TODO: Vérifier le nom exact du champ Branch Code en BC
+                    // RecSalesHeader.Validate("Branch Code", RecLocation."Branch Code");
+                end;
+
+                RecSalesHeader.SetHideValidationDialog(true);
+
+                // [FIX-2] Department Code depuis RecUserSetup
+                // RecSalesHeader.Validate("Department Code", RecUserSetup."Department Code");
+
+                if GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '' then
+                    RecSalesHeader.Validate(
+                        "Sell-to Customer No.",
+                        GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID'))
+                else
+                    RecSalesHeader.Validate(
+                        "Sell-to Customer No.",
+                        eDMSSetup.PRPassingAccount);
+
+                RecSalesHeader.Validate("VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
+                RecSalesHeader."Dossier SBOX" := true;
+                RecSalesHeader.Insert(true);
+
+                // [FIX-6] "Inv. Discount %" → CalcInvDiscountAmount / "Invoice Discount Value"
+                //         NB : "Payment Discount %" = escompte de règlement, sémantique différente.
+                //         Utiliser CalcInvDiscountAmount ou le champ "Invoice Discount Value" selon la table.
+                if eDMSSetup."Discount allowed" and CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                    if lTYPEREMISE = 1 then
+                        RecSalesHeader.Validate("Invoice Discount Value", lREMISEDOSSIER)
+                    else
+                        if (lPRIXDOSSIER_TTC + lREMISEDOSSIER) > 0 then
+                            RecSalesHeader.Validate(
+                                "Invoice Discount Value",
+                                (lREMISEDOSSIER / (lPRIXDOSSIER_TTC + lREMISEDOSSIER)) * 100);
+                    RecSalesHeader.Modify(true);
+                end;
+
+                lREMISELDTTOT := 0;
+                lPRIXLDTTTCTOT := 0;
+
+                AddAttribute(XMLRoot, 'Code', '0');
+                AddAttribute(XMLRoot, 'TexteDMS', Text0003);
+                AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecSalesHeader."No.");
+
+                for i := 1 to XmlNodesLDT.Count() do begin
+                    XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                    LigneDT_ID := GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID');
+                    XMLNodeLDT_Temp.AsXmlElement().SelectNodes('PR', XMLNodesPR);
+
+                    for j := 1 to XMLNodesPR.Count() do begin
+                        XMLNodesPR.Get(j, XMLNodePR_Temp);
+                        if j = 1 then
+                            InsertPRSalesLineLDT(
+                                RecSalesHeader,
+                                XMLNodePR_Temp.AsXmlElement(),
+                                CopyStr(LigneDT_ID, 1, 20))
+                        else
+                            InsertPRSalesLine(
+                                RecSalesHeader,
+                                XMLNodePR_Temp.AsXmlElement(),
+                                CopyStr(LigneDT_ID, 1, 20));
+                    end;
+
+                    if eDMSSetup."Discount allowed LDT" and
+                       CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                        Evaluate(lREMISELDT,
+                            ConvertStr(GetAttributeValue(
+                                XMLNodeLDT_Temp.AsXmlElement(), 'REMISE_PRICING_LDT'), '.', ','));
+                        Evaluate(lPRIXLDTTTC,
+                            ConvertStr(GetAttributeValue(
+                                XMLNodeLDT_Temp.AsXmlElement(), 'PRIXTTC_LDT'), '.', ','));
+                        lREMISELDTTOT += lREMISELDT;
+                        lPRIXLDTTTCTOT += lPRIXLDTTTC;
+                    end;
+
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', LigneDT_ID);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', LigneDT_ID);
+                end;
+
+                // [FIX-6] Même correction que ci-dessus pour le discount LDT
+                if eDMSSetup."Discount allowed LDT" then begin
+                    if (lREMISELDTTOT + lPRIXLDTTTCTOT) > 0 then
+                        RecSalesHeader.Validate(
+                            "Invoice Discount Value",
+                            RecSalesHeader."Invoice Discount Value" +
+                            ((lREMISELDTTOT / (lREMISELDTTOT + lPRIXLDTTTCTOT)) * 100));
+                    RecSalesHeader.Modify(true);
+                end;
+
+            end else begin
+                ErrorResponse(XMLRoot, Text0007);
+                for i := 1 to XmlNodesLDT.Count() do begin
+                    XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                        GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                end;
+            end;
+
+            // ======================================================================
+            // ORIGINEVENTE ≠ '1' → Dossier service APV
+            // ======================================================================
+        end else begin
+
+            if GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage') <> '' then
+                Evaluate(Kilometrage,
+                    DelChr(GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage'), '=', ' '));
+
+            RecVehicle.Reset();
+            RecVehicle.SetRange("VIN", GetAttributeValue(XMLNodeVehicle, 'VIN'));
+            if RecVehicle.FindFirst() then
+                if Kilometrage > RecVehicle."Variable Field Run 1" then begin
+                    RecVehicle."Variable Field Run 1" := Kilometrage;
+                    RecVehicle.Modify(true);
+                end;
+
+            // ==================================================================
+            // Nième transfert → Mise à jour dossier existant
+            // ==================================================================
+            if GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID') <> '' then begin
+
+                if not CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                    ErrorResponse(XMLRoot, Text0005);
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                        AddElement(XMLRoot, 'LDT', TmpNode);
+                        AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                            GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                    end;
+                    exit;
+                end;
+
+                RecServiceHeader.Reset();
+                RecServiceHeader.SetRange("Document Type", RecServiceHeader."Document Type"::Order);
+                RecServiceHeader.SetRange("No.", GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID'));
+
+                if RecServiceHeader.FindFirst() then begin
+
+                    // [FIX-4] Pickup Date (et non Order Date) dans le Nième transfert
+                    if (GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT') <> '') and
+                       (GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT') <> '') and
+                       (GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT') <> '') then begin
+                        Evaluate(lDAY, GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT'));
+                        Evaluate(lMonth, GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT'));
+                        Evaluate(lYEAR, GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT'));
+                        // TODO: Vérifier le nom exact du champ "Pickup Date" dans la table Service Header EDMS
+                        //RecServiceHeader."Pickup Date" := DMY2Date(lDAY, lMonth, lYEAR);
+                        RecServiceHeader."Order Date" := DMY2Date(lDAY, lMonth, lYEAR); // à remplacer par Pickup Date
+                    end;
+
+                    // [FIX-3] Pickup Time et TPSIMMO — champs à localiser dans la table BC
+                    // TODO: RecServiceHeader."Pickup Time" :=
+                    //           GetAttributeValue(XMLNodeReq,'HEURESRDV_RESTIT') + ':' +
+                    //           GetAttributeValue(XMLNodeReq,'MINUTESRDV_RESTIT');
+                    // TODO: Evaluate(RecServiceHeader.TPSIMMO, GetAttributeValue(XMLNodeReq,'TPSIMMO'));
+
+                    RecServiceHeader.Modify(true);
+
+                    AddAttribute(XMLRoot, 'Code', '0');
+                    AddAttribute(XMLRoot, 'TexteDMS', Text0004);
+                    AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
+
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+
+                        eDMSSetup.Get();
+                        if eDMSSetup.interfaceVersion = '13' then
+                            lCodeUpdateDelete := 'CODEVENTILATION_LDT'
+                        else
+                            lCodeUpdateDelete := 'TYPEIMPUTATION_LDT';
+
+                        if GetAttributeValue(
+                            XMLNodeLDT_Temp.AsXmlElement(), lCodeUpdateDelete) = '99' then
+                            DeleteLDT(RecServiceHeader, XMLNodeLDT_Temp.AsXmlElement())
+
+                        else begin
+                            if GetAttributeValue(
+                                XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID_DMS') <> '' then begin
+
+                                Evaluate(JobLineNo,
+                                    GetAttributeValue(
+                                        XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID_DMS'));
+
+                                RecServiceJobLine.Reset();
+                                RecServiceJobLine.SetRange("Document Type", RecServiceHeader."Document Type");
+                                RecServiceJobLine.SetRange("Document No.", RecServiceHeader."No.");
+                                // [FIX-9] Original C/AL utilise "Line No." — à confirmer vs "Task No." en BC
+                                RecServiceJobLine.SetRange("Task No.", JobLineNo);
+                                // RecServiceJobLine.SetRange("Task No.", JobLineNo); // Alternative BC
+
+                                if RecServiceJobLine.FindFirst() then begin
+                                    UpdateLDT(RecServiceHeader,
+                                        XMLNodeLDT_Temp.AsXmlElement(), XMLRoot);
+                                    // Bloc AddElement/AddAttribute géré dans UpdateLDT (identique à l'original)
+                                end else
+                                    InsertLDT(RecServiceHeader,
+                                        XMLNodeLDT_Temp.AsXmlElement(), XMLRoot);
+
+                            end else
+                                InsertLDT(RecServiceHeader,
+                                    XMLNodeLDT_Temp.AsXmlElement(), XMLRoot);
+                        end;
+                    end;
+                end;
+
+                // ==================================================================
+                // 1er transfert → Création d'un nouveau dossier APV
+                // ==================================================================
+            end else begin
+
+                if not CheckUserPermissionAPV('APV_CREATE', RecUserSetup) then begin
+                    ErrorResponse(XMLRoot, Text0006);
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                        AddElement(XMLRoot, 'LDT', TmpNode);
+                        AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                            GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                    end;
+                    exit;
+                end;
+
+                if GetAttributeValue(XMLNodeCustomer, 'Observations') = '' then begin
+                    ErrorResponse(XMLRoot, Text0002);
+                    for i := 1 to XmlNodesLDT.Count() do begin
+                        XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                        AddElement(XMLRoot, 'LDT', TmpNode);
+                        AddAttribute(TmpNode, 'LIGNE_DT_ID',
+                            GetAttributeValue(XMLNodeLDT_Temp.AsXmlElement(), 'LIGNE_DT_ID'));
+                    end;
+                    exit;
+                end;
+
+                RecServiceHeader.Init();
+                RecServiceHeader."Document Type" := RecServiceHeader."Document Type"::Order;
+
+                // [FIX-1] Champs présents dans l'original C/AL
+                RecServiceHeader."Location Code" := RecServiceLocation.Code;
+                // TODO: Vérifier le nom exact du champ Branch Code en BC
+                // RecServiceHeader."Branch Code"   := RecLocation."Branch Code";
+
+                // [FIX-1] Réceptionnaire = utilisateur connecté
+                //RecServiceHeader.Réceptionnaire := RecUserSetup."User ID";
+                // TODO: Si le champ s'appelle différemment en BC :
+                // RecServiceHeader."Receptionist Code" := RecUserSetup."User ID";
+
+                // [FIX-1] Dossier SBOX
+                RecServiceHeader."Dossier SBOX" := true;
+
+                // [FIX-1] Order Limit depuis Observations
+                Evaluate(RecServiceHeader."Order Limit",
+                    GetAttributeValue(XMLNodeCustomer, 'Observations'));
+
+                RecServiceHeader.Insert(true);
+                RecServiceHeader.SetHideValidationDialog(true);
+
+                if GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID') <> '' then begin
+                    if RecCustomer.Get(GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID')) then
+                        RecServiceHeader.Validate(
+                            "Sell-to Customer No.",
+                            GetAttributeValue(XMLNodeCustomer, 'CLIENT_DMS_ID'))
+                    else
+                        RecServiceHeader.Validate(
+                            "Sell-to Customer No.",
+                            eDMSSetup."Customer Imputation Account");
+                end else
+                    RecServiceHeader.Validate(
+                        "Sell-to Customer No.",
+                        eDMSSetup."Customer Imputation Account");
+
+                RecServiceHeader.Validate(VIN, GetAttributeValue(XMLNodeVehicle, 'VIN'));
+
+                // [FIX-1] Kilométrage
+                Evaluate(RecServiceHeader."Variable Field Run 1",
+                    DelChr(GetAttributeValue(XMLNodeVehicle, 'DernierKilometrage'), '=', ' '));
+
+                // [FIX-1] Department Code depuis RecUserSetup
+                // RecServiceHeader.Validate("Department Code", RecUserSetup."Department Code");
+
+                // Date RDV (Order Date)
+                if (GetAttributeValue(XMLNodeReq, 'JOURRDV') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'MOISRDV') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'ANNEERDV') <> '') then begin
+                    Evaluate(lDAY, GetAttributeValue(XMLNodeReq, 'JOURRDV'));
+                    Evaluate(lMonth, GetAttributeValue(XMLNodeReq, 'MOISRDV'));
+                    Evaluate(lYEAR, GetAttributeValue(XMLNodeReq, 'ANNEERDV'));
+                    RecServiceHeader."Order Date" := DMY2Date(lDAY, lMonth, lYEAR);
+                end;
+
+                // [FIX-3] Time of Order — champ à localiser dans la table BC
+                // TODO: if Evaluate(RecServiceHeader."Time of Order",
+                //           GetAttributeValue(XMLNodeReq,'HEURESRDV') + ':' +
+                //           GetAttributeValue(XMLNodeReq,'MINUTESRDV')) then ;
+
+                // Date restitution (Pickup Date)
+                if (GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT') <> '') and
+                   (GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT') <> '') then begin
+                    Evaluate(lDAY, GetAttributeValue(XMLNodeReq, 'JOURRDV_RESTIT'));
+                    Evaluate(lMonth, GetAttributeValue(XMLNodeReq, 'MOISRDV_RESTIT'));
+                    Evaluate(lYEAR, GetAttributeValue(XMLNodeReq, 'ANNEERDV_RESTIT'));
+                    // TODO: Vérifier le nom exact du champ "Pickup Date" dans la table BC
+                    // RecServiceHeader."Pickup Date" := DMY2Date(lDAY, lMonth, lYEAR);
+                end;
+
+                // [FIX-3] Pickup Time et TPSIMMO — champs à localiser dans la table BC
+                // TODO: if Evaluate(RecServiceHeader."Pickup Time",
+                //           GetAttributeValue(XMLNodeReq,'HEURESRDV_RESTIT') + ':' +
+                //           GetAttributeValue(XMLNodeReq,'MINUTESRDV_RESTIT')) then ;
+                // TODO: if Evaluate(RecServiceHeader.TPSIMMO, GetAttributeValue(XMLNodeReq,'TPSIMMO')) then ;
+
+                RecServiceHeader.Modify(true);
+
+                AddAttribute(XMLRoot, 'Code', '0');
+                AddAttribute(XMLRoot, 'TexteDMS', Text0003);
+                AddAttribute(XMLRoot, 'DOSSIER_DMS_ID', RecServiceHeader."No.");
+
+                for i := 1 to XmlNodesLDT.Count() do begin
+                    XmlNodesLDT.Get(i, XMLNodeLDT_Temp);
+                    InsertLDT(RecServiceHeader, XMLNodeLDT_Temp.AsXmlElement(), XMLRoot);
+                end;
+
+                // [FIX-5] Impression du dossier — réintégrée depuis l'original C/AL
+                if GetAttributeValue(XMLNodeCustomer, 'IMPRIM') = '1' then
+                    PrintOrder(RecServiceHeader, GetAttributeValue(XMLNodeReq, 'NumeroPoste'));
+
+            end;
+        end;
+
 
     end;
 
-    procedure HandlePR(
-        var TempRoot: XmlElement;
-        var XMLRoot: XmlElement;
-        ItemNo: Code[20];
-        CustomerNo: Code[20];
-        LigneId: Text)
+    procedure PrintOrder(ServiceHeader: Record "Service Header EDMS"; NumeroPoste: Text[30])
     var
-        Item: Record Item;
-        NodePR: XmlElement;
-        AvailableInventory: Decimal;
+        ServHdr: Record "Service Header EDMS";
+    begin
+        ServHdr.SetRange("Document Type", ServiceHeader."Document Type");
+        ServHdr.SetRange("No.", ServiceHeader."No.");
+        if ServHdr.FindFirst() then
+            Report.Run(5025619, false, true, ServHdr);
+    end;
+
+    procedure InsertLDTInsertLineSboxForfait(
+           RecServiceHeader: Record "Service Header EDMS";
+           XMLNodeLDT: XmlElement;
+           var XMLRoot: XmlElement)
+    var
+        XMLNodesPR, XMLNodesMO : XmlNodeList;
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        Package: Record "Service Package";
+        Vehicle: Record Vehicle;
+        eDMSSetup: Record "STF Servicebox Setup";
+        TmpNode: XmlElement;
+        XMLNodePR_Temp: XmlNode;
+        XMLNodeMO_Temp: XmlNode;
+        i: Integer;
+        version: Integer;
+        IDFORFAIT_Attribute_value: Text[30];
+        CODEIMPUTATION_LDT_value: Code[20];
+        Text0001: Label 'Aucune version active pour le forfait indiqué !';
+        Text0002: Label 'Véhicule introuvable dans Business Central.';
     begin
 
-        if not Item.Get(ItemNo) then
-            exit;
+        // =========================================================
+        // CAS 1 : LDT avec un FORFAIT (IDFORFAIT rempli)
+        // =========================================================
+        if GetAttributeValue(XMLNodeLDT, 'IDFORFAIT') <> '' then begin
 
-        Item.CalcFields(Inventory);
-        AvailableInventory := Item.Inventory;
+            IDFORFAIT_Attribute_value := GetAttributeValue(XMLNodeLDT, 'IDFORFAIT');
 
-        NodePR := XmlElement.Create('PR');
+            Vehicle.Reset();
+            Vehicle.SetRange("VIN", RecServiceHeader.VIN);
+            if not Vehicle.FindFirst() then begin
+                ErrorResponse(XMLRoot, Text0002);
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                exit;
+            end;
 
-        NodePR.SetAttribute('REFERENCE_PR', ItemNo);
-        NodePR.SetAttribute('STOCK', Format(AvailableInventory));
-        NodePR.SetAttribute('LIGNE_DT_ID', LigneId);
+            Package.Reset();
+            Package.SetRange("Make Code", RecServiceHeader."Make Code");
+            Package.SetRange("No.", IDFORFAIT_Attribute_value);
 
-        XMLRoot.Add(NodePR);
+            // ── A. Forfait existant dans le DMS (Standard) ────────────────
+            if Package.FindFirst() and not Package.Blocked then begin
+                version := GetPackageVersion(Package."Make Code", Package."No.");
 
+                if version <> 0 then begin
+                    RecServiceJobLine.Init();
+                    RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+                    RecServiceJobLine."Document No." := RecServiceHeader."No.";
+                    RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+                    RecServiceJobLine.Commentaire := GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL');
+                    RecServiceJobLine."Symptome Code" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+                    CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+                    CheckCustomerByTypeImputation(GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT'), CODEIMPUTATION_LDT_value);
+                    RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+                    Evaluate(RecServiceJobLine."Symptome Description", GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT'));
+
+                    RecServiceJobLine.Validate("Package No.", IDFORFAIT_Attribute_value);
+                    RecServiceJobLine.Validate("Package Version No.", version);
+
+                    eDMSSetup.Get();
+                    if GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT') = Format(eDMSSetup."Insurance Imputation Code") then
+                        RecServiceJobLine.Validate(Assurance, true);
+
+                    RecServiceJobLine.Insert(true);
+                    CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
+
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+                end else begin
+                    ErrorResponse(XMLRoot, Text0001);
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                end;
+
+                // ── B. Forfait SBOX (Non créé dans le DMS) ───────────────────
+            end else begin
+                // 1. On crée la ligne de Job d'abord
+                RecServiceJobLine.Init();
+                RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+                RecServiceJobLine."Document No." := RecServiceHeader."No.";
+                RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+                RecServiceJobLine.Commentaire := GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL');
+                RecServiceJobLine."Symptome Code" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+                CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+                CheckCustomerByTypeImputation(GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT'), CODEIMPUTATION_LDT_value);
+                RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+                RecServiceJobLine."Package Type" := RecServiceJobLine."Package Type"::SBOX;
+                RecServiceJobLine."Package No." := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."Package Version No." := 10000;
+                RecServiceJobLine."SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
+                RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+                // Gestion des prix forfait SBOX
+                if Evaluate(RecServiceJobLine."SBOX PrixHT Forfait", ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXHT_LDT'), '.', ',')) then;
+                if Evaluate(RecServiceJobLine."SBOX PrixTTC Forfait", ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXTTC_LDT'), '.', ',')) then;
+
+                RecServiceJobLine.Insert(true); // INSERTION ICI pour permettre aux lignes PR/MO de se lier
+
+                // 2. Insertion des PR et MO (On utilise les vraies fonctions InsertPR/MO)
+                XMLNodeLDT.SelectNodes('PR', XMLNodesPR);
+                XMLNodeLDT.SelectNodes('MO', XMLNodesMO);
+
+                for i := 1 to XMLNodesPR.Count() do begin
+                    XMLNodesPR.Get(i, XMLNodePR_Temp);
+                    InsertPRServiceLine(RecServiceJobLine, XMLNodePR_Temp.AsXmlElement());
+                end;
+
+                for i := 1 to XMLNodesMO.Count() do begin
+                    XMLNodesMO.Get(i, XMLNodeMO_Temp);
+                    InsertMOServiceLine(RecServiceJobLine, XMLNodeMO_Temp.AsXmlElement());
+                end;
+
+                RecServiceJobLine.Modify(true);
+
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+            end;
+
+            // =========================================================
+            // CAS 2 : LDT STANDARD (Sans forfait)
+            // =========================================================
+        end else begin
+            RecServiceJobLine.Init();
+            RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+            RecServiceJobLine."Document No." := RecServiceHeader."No.";
+            RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+            RecServiceJobLine.Commentaire := GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL');
+
+            CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+            CheckCustomerByTypeImputation(GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT'), CODEIMPUTATION_LDT_value);
+            RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+            Evaluate(RecServiceJobLine."Symptome Description", GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT'));
+            RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+            RecServiceJobLine.Insert(true);
+
+            XMLNodeLDT.SelectNodes('PR', XMLNodesPR);
+            XMLNodeLDT.SelectNodes('MO', XMLNodesMO);
+
+            for i := 1 to XMLNodesPR.Count() do begin
+                XMLNodesPR.Get(i, XMLNodePR_Temp);
+                InsertPRServiceLine(RecServiceJobLine, XMLNodePR_Temp.AsXmlElement());
+            end;
+
+            for i := 1 to XMLNodesMO.Count() do begin
+                XMLNodesMO.Get(i, XMLNodeMO_Temp);
+                InsertMOServiceLine(RecServiceJobLine, XMLNodeMO_Temp.AsXmlElement());
+            end;
+
+            AddElement(XMLRoot, 'LDT', TmpNode);
+            AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+            AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+        end;
+    end;
+
+
+    procedure InsertLDT(
+          RecServiceHeader: Record "Service Header EDMS";
+          XMLNodeLDT: XmlElement;
+          var XMLRoot: XmlElement)
+    var
+        XMLNodesPR, XMLNodesMO : XmlNodeList;
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        Package: Record "Service Package";
+        Vehicle: Record Vehicle;
+        eDMSSetup: Record "STF Servicebox Setup";
+        TmpNode: XmlElement;
+        XMLNodePR_Temp: XmlNode;
+        XMLNodeMO_Temp: XmlNode;
+        i: Integer;
+        version: Integer;
+        IDFORFAIT_Attribute_value: Text[30];
+        CODEIMPUTATION_LDT_value: Code[20];
+        LocalCodeMarkSBOX: Code[20];
+        Text0001: Label 'Aucune version active pour le forfait indiqué !';
+        Text0002: Label 'Véhicule introuvable dans Business Central.';
+    begin
+
+        // =========================================================
+        // CAS 1 : LDT de type FORFAIT (IDFORFAIT renseigné)
+        // =========================================================
+        if GetAttributeValue(XMLNodeLDT, 'IDFORFAIT') <> '' then begin
+
+            IDFORFAIT_Attribute_value := GetAttributeValue(XMLNodeLDT, 'IDFORFAIT');
+
+            // Recherche du véhicule — comportement identique à vehicle.GET de l'original
+            Vehicle.Reset();
+            Vehicle.SetRange("VIN", RecServiceHeader.VIN);
+            if not Vehicle.FindFirst() then begin
+                ErrorResponse(XMLRoot, Text0002);
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                exit;
+            end;
+
+            Package.Reset();
+            Package.SetRange("Make Code", RecServiceHeader."Make Code");
+            Package.SetRange("No.", IDFORFAIT_Attribute_value);
+
+            // ── A. Forfait DMS standard (Package trouvé et non bloqué) ────────────
+            if Package.FindFirst() and not Package.Blocked then begin
+
+                version := GetPackageVersion(Package."Make Code", Package."No.");
+
+                if version <> 0 then begin
+
+                    RecServiceJobLine.Init();
+                    RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+                    RecServiceJobLine."Document No." := RecServiceHeader."No.";
+                    RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+
+                    // [IFIX-4] CopyStr limité à 50 car = Complaint Text[50] dans l'original
+                    RecServiceJobLine.Commentaire := CopyStr(GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL'), 1, 50);
+                    RecServiceJobLine."Symptome Code" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+                    CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+                    CheckCustomerByTypeImputation(
+                        GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'),
+                        CODEIMPUTATION_LDT_value);
+                    RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+                    Evaluate(RecServiceJobLine."Symptome Description",
+                        GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'));
+
+                    RecServiceJobLine.Validate("Package No.", IDFORFAIT_Attribute_value);
+                    RecServiceJobLine.Validate("Package Version No.", version);
+
+                    eDMSSetup.Get();
+                    if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
+                       Format(eDMSSetup."Insurance Imputation Code") then
+                        RecServiceJobLine.Validate(Assurance, true);
+
+                    RecServiceJobLine.Insert(true);
+                    CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
+
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+
+                end else begin
+                    // Aucune version active pour ce forfait
+                    ErrorResponse(XMLRoot, Text0001);
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                end;
+
+                // ── B. Forfait SBOX (Package introuvable dans le DMS) ─────────────────
+            end else begin
+
+                // Ordre original C/AL : InsertTempPR/MO EN PREMIER, puis Init/Insert de JobLine
+                XMLNodeLDT.SelectNodes('PR', XMLNodesPR);
+                XMLNodeLDT.SelectNodes('MO', XMLNodesMO);
+
+
+
+                RecServiceJobLine.Init();
+                RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+                RecServiceJobLine."Document No." := RecServiceHeader."No.";
+                RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+
+                // [IFIX-4] CopyStr limité à 50
+                RecServiceJobLine.Commentaire := CopyStr(GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL'), 1, 50);
+                RecServiceJobLine."Symptome Code" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+                CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+                CheckCustomerByTypeImputation(
+                    GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'),
+                    CODEIMPUTATION_LDT_value);
+                RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+                Evaluate(RecServiceJobLine."Symptome Description",
+                    GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'));
+
+                // Champs spécifiques forfait SBOX
+                RecServiceJobLine."Package Type" := RecServiceJobLine."Package Type"::SBOX;
+                RecServiceJobLine."Package No." := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                // [IFIX-1] Valeur 1000 conforme à l'original C/AL (InsertLDTLV avait 10000 — erreur)
+                RecServiceJobLine."Package Version No." := 1000;
+                RecServiceJobLine."SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
+                RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+                RecServiceJobLine."SBOX TYPE IMPUTATION" := GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT');
+
+                // [IFIX-2] ConvertStr('.', ',') — sens correct pour Evaluate en locale FR
+                //          InsertLDTLV avait inversé en (',', '.') ce qui est faux
+                if Evaluate(RecServiceJobLine."SBOX PrixHT Forfait",
+                    ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXHT_LDT'), '.', ',')) then;
+                if Evaluate(RecServiceJobLine."SBOX PrixTTC Forfait",
+                    ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXTTC_LDT'), '.', ',')) then;
+
+
+                LocalCodeMarkSBOX := CodeMarkSBOX;   // variable globale du codeunit
+                if LocalCodeMarkSBOX = '' then
+                    LocalCodeMarkSBOX := 'PEUGEOT';
+                RecServiceJobLine."Make Code" := LocalCodeMarkSBOX;
+
+                eDMSSetup.Get();
+                if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
+                   Format(eDMSSetup."Insurance Imputation Code") then
+                    RecServiceJobLine.Validate(Assurance, true);
+
+                RecServiceJobLine.Insert(true);
+                CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
+
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+            end;
+
+            // =========================================================
+            // CAS 2 : LDT standard (sans forfait)
+            // =========================================================
+        end else begin
+
+            RecServiceJobLine.Init();
+            RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+            RecServiceJobLine."Document No." := RecServiceHeader."No.";
+            RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+
+            // [IFIX-4] CopyStr limité à 50
+            RecServiceJobLine.Commentaire := CopyStr(GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL'), 1, 50);
+
+            CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+            CheckCustomerByTypeImputation(
+                GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'),
+                CODEIMPUTATION_LDT_value);
+            RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+            Evaluate(RecServiceJobLine."Symptome Description",
+                GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'));
+
+            RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+            eDMSSetup.Get();
+            if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
+               Format(eDMSSetup."Insurance Imputation Code") then
+                RecServiceJobLine.Validate(Assurance, true);
+
+            RecServiceJobLine.Insert(true);
+            CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
+
+            AddElement(XMLRoot, 'LDT', TmpNode);
+            AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+            AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+
+            // Insertion des lignes PR et MO (après AddElement — identique à l'original)
+            XMLNodeLDT.SelectNodes('PR', XMLNodesPR);
+            XMLNodeLDT.SelectNodes('MO', XMLNodesMO);
+
+            for i := 1 to XMLNodesPR.Count() do begin
+                XMLNodesPR.Get(i, XMLNodePR_Temp);
+                InsertPRServiceLine(RecServiceJobLine, XMLNodePR_Temp.AsXmlElement());
+            end;
+
+            for i := 1 to XMLNodesMO.Count() do begin
+                XMLNodesMO.Get(i, XMLNodeMO_Temp);
+                InsertMOServiceLine(RecServiceJobLine, XMLNodeMO_Temp.AsXmlElement());
+            end;
+        end;
+        // NOTE : LDTNo := RecServiceJobLine."Line No." présent en commentaire dans l'original
+        //        → non migré car déjà commenté à la source.
+    end;
+
+
+    procedure InsertLDTLV(RecServiceHeader: Record "Service Header EDMS"; XMLNodeLDT: XmlElement; var XMLRoot: XmlElement)
+    var
+        XMLNodesPR, XMLNodesMO : XmlNodeList;
+        RecServiceJobLine: Record "Service Order Symptome  EDMS";
+        Package: Record "Service Package";
+        Vehicle: Record Vehicle;
+        eDMSSetup: Record "STF Servicebox Setup";
+        TmpNode: XmlElement;
+        XMLNodePR_Temp: XmlNode;
+        XMLNodeMO_Temp: XmlNode;
+        i: Integer;
+        version: Integer;
+        IDFORFAIT_Attribute_value: Text[30];
+        CODEIMPUTATION_LDT_value: Code[20];
+        Text0001: Label 'Aucune version active pour le forfait indiqué !';
+        Text0002: Label 'Véhicule introuvable dans Business Central.';
+    begin
+
+        // =========================================================
+        // CAS 1 : LDT de type FORFAIT (IDFORFAIT renseigné)
+        // =========================================================
+        if GetAttributeValue(XMLNodeLDT, 'IDFORFAIT') <> '' then begin
+
+            IDFORFAIT_Attribute_value := GetAttributeValue(XMLNodeLDT, 'IDFORFAIT');
+
+            // [5] CORRIGÉ : GET → erreur explicite si VIN inexistant
+            //     (l'original faisait vehicle.GET qui plantait proprement)
+            //     On reproduit ce comportement : si pas trouvé, on sort avec erreur
+
+            Vehicle.Reset();
+            Vehicle.SetRange("VIN", RecServiceHeader.VIN);
+
+            if not Vehicle.FindFirst() then begin
+
+                ErrorResponse(XMLRoot, Text0002);
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                exit;
+            end;
+
+            Package.Reset();
+            Package.SetRange("Make Code", RecServiceHeader."Make Code");
+            Package.SetRange("No.", IDFORFAIT_Attribute_value);
+
+            // ── Forfait DMS (Package trouvé et non bloqué) ─────────────────────
+            if Package.FindFirst() and not Package.Blocked then begin
+
+                version := GetPackageVersion(Package."Make Code", Package."No.");
+
+                if version <> 0 then begin
+
+                    RecServiceJobLine.Init();
+                    RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+                    RecServiceJobLine."Document No." := RecServiceHeader."No.";
+                    RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+
+                    // [1] Champs dans le bon sens (identique à l'original)
+                    //     Complaint  = LIBELLE_LIGNE_TRAVAIL  → Commentaire
+                    //     Complaint 2 = LIGNE_DT_ID           → Symptome Code
+                    RecServiceJobLine.Commentaire := GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL');//CopyStr(GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL'), 1, 50);
+                    RecServiceJobLine."Symptome Code" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+                    CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+                    CheckCustomerByTypeImputation(
+                        GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'),
+                        CODEIMPUTATION_LDT_value);
+                    RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+                    // Code d'imputation (TypeXX = 'TYPEFACTURATION' ou 'TYPEIMPUTATION')
+                    Evaluate(RecServiceJobLine."Symptome Description",
+                        GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'));
+
+                    RecServiceJobLine.Validate("Package No.", IDFORFAIT_Attribute_value);
+                    RecServiceJobLine.Validate("Package Version No.", version);
+
+                    eDMSSetup.Get();
+                    if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
+                       Format(eDMSSetup."Insurance Imputation Code") then
+                        RecServiceJobLine.Validate(Assurance, true);
+
+                    RecServiceJobLine.Insert(true);
+
+                    // [4] CORRIGÉ : nettoyage ServCustSplitUp après Insert (branche forfait DMS)
+                    CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
+
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+
+                end else begin
+                    // Aucune version active pour ce forfait
+                    ErrorResponse(XMLRoot, Text0001);
+                    AddElement(XMLRoot, 'LDT', TmpNode);
+                    AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                end;
+
+                // ── Forfait SBOX (Package introuvable dans le DMS) ─────────────────
+            end else begin
+
+
+                XMLNodeLDT.SelectNodes('PR', XMLNodesPR);
+                XMLNodeLDT.SelectNodes('MO', XMLNodesMO);
+
+
+                RecServiceJobLine.Init();
+                RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+                RecServiceJobLine."Document No." := RecServiceHeader."No.";
+                RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+
+                // [2] CORRIGÉ : champs dans le bon sens (étaient inversés)
+                //     Complaint  = LIBELLE_LIGNE_TRAVAIL  → Commentaire
+                //     Complaint 2 = LIGNE_DT_ID           → Symptome Code
+                RecServiceJobLine.Commentaire := GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL');// CopyStr(GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL'), 1, 50);
+                RecServiceJobLine."Symptome Code" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+                CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+                CheckCustomerByTypeImputation(
+                    GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'),
+                    CODEIMPUTATION_LDT_value);
+                RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+                // Champs spécifiques forfait SBOX
+                RecServiceJobLine."Package Type" := RecServiceJobLine."Package Type"::SBOX;
+
+                RecServiceJobLine."Package No." := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."Package Version No." := 10000;
+                RecServiceJobLine."SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
+                RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+                RecServiceJobLine."SBOX TYPE IMPUTATION" := GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT');
+
+                if Evaluate(RecServiceJobLine."SBOX PrixHT Forfait",
+     ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXHT_LDT'), ',', '.'), 9) then;
+                if Evaluate(RecServiceJobLine."SBOX PrixTTC Forfait",
+                    ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXTTC_LDT'), ',', '.'), 9) then;
+                eDMSSetup.Get();
+                if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
+                   Format(eDMSSetup."Insurance Imputation Code") then
+                    RecServiceJobLine.Validate(Assurance, true);
+
+                RecServiceJobLine.Insert(true);
+
+                // [4] CORRIGÉ : nettoyage ServCustSplitUp après Insert (branche forfait SBOX)
+                CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
+
+                AddElement(XMLRoot, 'LDT', TmpNode);
+                AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+                AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+            end;
+
+            // =========================================================
+            // CAS 2 : LDT standard (sans forfait)
+            // =========================================================
+        end else begin
+
+            RecServiceJobLine.Init();
+            RecServiceJobLine."Document Type" := RecServiceHeader."Document Type";
+            RecServiceJobLine."Document No." := RecServiceHeader."No.";
+            RecServiceJobLine."Task No." := GetNextJobLineNo(RecServiceHeader);
+            RecServiceJobLine.Commentaire := GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL');//CopyStr(GetAttributeValue(XMLNodeLDT, 'LIBELLE_LIGNE_TRAVAIL'), 1, 50);
+
+            // [3] CORRIGÉ : CheckCustomerByTypeImputation réactivée (était commentée)
+            CODEIMPUTATION_LDT_value := RecServiceHeader."Sell-to Customer No.";
+            CheckCustomerByTypeImputation(
+                GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'),
+                CODEIMPUTATION_LDT_value);
+            RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
+
+            // Code d'imputation
+            Evaluate(RecServiceJobLine."Symptome Description",
+                GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'));
+
+            RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+
+            eDMSSetup.Get();
+            if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
+               Format(eDMSSetup."Insurance Imputation Code") then
+                RecServiceJobLine.Validate(Assurance, true);
+
+            RecServiceJobLine.Insert(true);
+
+            // [4] CORRIGÉ : nettoyage ServCustSplitUp après Insert (branche LDT standard)
+            CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
+
+            AddElement(XMLRoot, 'LDT', TmpNode);
+            AddAttribute(TmpNode, 'LIGNE_DT_ID', GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID'));
+            AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', Format(RecServiceJobLine."Task No."));
+
+            // Insérer les lignes PR et MO
+            XMLNodeLDT.SelectNodes('PR', XMLNodesPR);
+            XMLNodeLDT.SelectNodes('MO', XMLNodesMO);
+
+            for i := 1 to XMLNodesPR.Count() do begin
+                XMLNodesPR.Get(i, XMLNodePR_Temp);
+                InsertPRServiceLine(RecServiceJobLine, XMLNodePR_Temp.AsXmlElement());
+            end;
+
+            for i := 1 to XMLNodesMO.Count() do begin
+                XMLNodesMO.Get(i, XMLNodeMO_Temp);
+                InsertMOServiceLine(RecServiceJobLine, XMLNodeMO_Temp.AsXmlElement());
+            end;
+        end;
+    end;
+
+    local procedure CleanServCustSplitUp(
+           RecServiceJobLine: Record "Service Order Symptome  EDMS";
+           CODEIMPUTATION_LDT_value: Code[20])
+    var
+        ServSplittingLine: Record "Service Splitting Line";
+    begin
+        ServSplittingLine.Reset();
+        ServSplittingLine.SetRange("Document Type", RecServiceJobLine."Document Type");
+        ServSplittingLine.SetRange("Document No.", RecServiceJobLine."Document No.");
+        ServSplittingLine.SetRange("DLT Instruction Line", RecServiceJobLine."Task No.");
+        ServSplittingLine.SetFilter("Bill-to Customer No.", '<>%1', CODEIMPUTATION_LDT_value);
+        if ServSplittingLine.FindSet() then
+            repeat
+                ServSplittingLine.Delete(true);
+            until ServSplittingLine.Next() = 0;
+    end;
+
+    procedure CheckUserPermissionAPV(Permission: Text[30]; User: Record "User Setup"): Boolean
+    var
+        Text0100: Label 'APV_CREATE';
+        Text0101: Label 'APV_MODIFY';
+        Text0102: Label 'APV_DISCOUNT';
+    begin
+        case Permission of
+            Text0100:
+                exit(true);
+            Text0101:
+                exit(true);
+            Text0102:
+                exit(true);
+            else
+                exit(false);
+        end;
+    end;
+
+
+
+
+    procedure GetPackageVersion(MakeCode: Code[10]; PackageNo: Code[20]): Integer
+    var
+        PkgVers: Record "Service Package Version";
+    begin
+        PkgVers.Reset();
+        PkgVers.SetRange("Make Code", MakeCode);
+        PkgVers.SetRange("Package No.", PackageNo);
+
+        if PkgVers.FindLast() then
+            exit(PkgVers."Version No.");
+
+        exit(0);
+    end;
+
+
+    /// <summary>
+    /// Valoriser un forfait (LZRF47T24)
+    /// Migré depuis C/AL vers AL (Business Central)
+    /// Tables : "Service Package" (5025615 → RecPackageVersion),
+    ///          "Service Package Version Line" (5025611 → RecPackageBOM)
+    /// </summary>
+    procedure LZRF47T24V1OLD(var XMLDom: XmlElement; XMLNodeReq: XmlElement)
+    var
+        RecPackageVersion: Record "Service Package Version";
+        RecPackageBOM: Record "Service Package Version Line";
+        XMLRoot: XmlElement;
+        XMLNodeFF: XmlElement;
+        XMLNode: XmlElement;
+        XMLNodeMO: XmlElement;
+        XMLNodePR: XmlElement;
+        XMLNodesLDT: XmlNodeList;
+        XMLNodeLDT: XmlNode;
+        XMLNodeLDTElem: XmlElement;
+        TmpNode: XmlNode;
+        IDForfait: Text;
+        LigneDtId: Text;
+        TotalHT: Decimal;
+        RootFound: Boolean;
+        NodesFound: Boolean;
+    begin
+        // VALORISER UN FORFAIT
+        // XMLDom est le nœud DMS (XmlElement) — plus de XmlDocument
+
+        // Recherche du nœud LZRF47 sous DMS
+        RootFound := XMLDom.SelectSingleNode('LZRF47', TmpNode);
+        if RootFound then
+            XMLRoot := TmpNode.AsXmlElement();
+
+        // SelectNodes : (XPath: Text; var Result: XmlNodeList) : Boolean
+        NodesFound := XMLNodeReq.SelectNodes('LDT', XMLNodesLDT);
+        if NodesFound and (XMLNodesLDT.Count > 0) then begin
+
+            if not RootFound then
+                AddElement(XMLDom, 'LZRF47', XMLRoot);
+
+            foreach XMLNodeLDT in XMLNodesLDT do begin
+
+                XMLNodeLDTElem := XMLNodeLDT.AsXmlElement();
+                GetChildElement(XMLNodeLDTElem, 'FF', XMLNodeFF);
+
+                IDForfait := GetAttributeValue(XMLNodeFF, 'IDFORFAIT');
+                LigneDtId := GetAttributeValue(XMLNodeFF, 'LIGNE_DT_ID');
+
+                // Recherche de l'en-tête forfait
+                RecPackageVersion.Reset();
+                RecPackageVersion.SetFilter("Package No.", IDForfait);
+                if RecPackageVersion.FindLast() then begin
+
+                    // ── Calcul du prix HT total depuis les lignes ──────────────────
+                    // "Unit Price" est sur "Service Package Version Line", pas sur l'en-tête.
+                    // On somme toutes les lignes du forfait pour obtenir le prix global HT.
+                    // Pas de champ TTC natif → on utilise la même valeur (TVA gérée côté DMS)
+                    TotalHT := 0;
+                    RecPackageBOM.Reset();
+                    RecPackageBOM.SetFilter("Package No.", RecPackageVersion."Package No.");
+                    RecPackageBOM.SetFilter("Version No.", '%1', RecPackageVersion."Version No.");
+                    if RecPackageBOM.FindSet() then
+                        repeat
+                            TotalHT += RecPackageBOM."Unit Price" * RecPackageBOM.Quantity;
+                        until RecPackageBOM.Next() = 0;
+
+                    AddAttribute(XMLRoot, 'Code', '0');
+                    AddAttribute(XMLRoot, 'TexteDMS', '');
+                    AddElement(XMLRoot, 'FF', XMLNode);
+                    AddAttribute(XMLNode, 'CODE_FF', '2');
+                    AddAttribute(XMLNode, 'LIGNE_DT_ID', LigneDtId);
+                    AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', '');
+                    AddAttribute(XMLNode, 'IDFORFAIT', RecPackageVersion."Package No.");
+                    AddAttribute(XMLNode, 'ReferenceFF', RecPackageVersion."Package No.");
+                    AddAttribute(XMLNode, 'LibelleFF', RecPackageVersion.Description);
+                    AddAttribute(XMLNode, 'PrixUnitaireHT',
+                        Format(TotalHT, 0, '<Precision,2:2><Standard Format,2>'));
+                    AddAttribute(XMLNode, 'PrixUnitaireTTC',
+                        Format(TotalHT, 0, '<Precision,2:2><Standard Format,2>'));  // ⚠️ adapter si TTC ≠ HT
+                    AddAttribute(XMLNode, 'REMISE', '');
+                    AddAttribute(XMLNode, 'TexteErreur', '');
+
+                    // ── Parcours des lignes BOM ────────────────────────────────────
+                    RecPackageBOM.Reset();
+                    RecPackageBOM.SetFilter("Package No.", RecPackageVersion."Package No.");
+                    RecPackageBOM.SetFilter("Version No.", '%1', RecPackageVersion."Version No.");
+                    if RecPackageBOM.FindFirst() then
+                        repeat
+                            case RecPackageBOM.Type of
+
+                                RecPackageBOM.Type::Item:
+                                    begin
+                                        // Pièce (PR)
+                                        AddElement(XMLNode, 'PR', XMLNodePR);
+                                        AddAttribute(XMLNodePR, 'CODEIMPUTATIONDMS_PR', '');
+                                        AddAttribute(XMLNodePR, 'TYPEIMPUTATION_PR', '');
+                                        AddAttribute(XMLNodePR, 'REFERENCE_PR', SetItemNo(RecPackageBOM."No."));
+                                        AddAttribute(XMLNodePR, 'LIBELLE_PR', RecPackageBOM.Description);
+                                        AddAttribute(XMLNodePR, 'TYPE_PR', '2');
+                                        AddAttribute(XMLNodePR, 'QuantiteEnCommande',
+                                            Format(RecPackageBOM.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                    end;
+
+                                RecPackageBOM.Type::Labor:
+                                    begin
+                                        // Main d'œuvre (MO)
+                                        AddElement(XMLNode, 'MO', XMLNodeMO);
+                                        AddAttribute(XMLNodeMO, 'CODEIMPUTATIONDMS_MO', '');
+                                        AddAttribute(XMLNodeMO, 'TYPEIMPUTATION_MO', '');
+                                        AddAttribute(XMLNodeMO, 'CODEOPERATION', RecPackageBOM."No.");
+                                        AddAttribute(XMLNodeMO, 'TYPEOPERATION', '2');
+                                        AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE', '');
+                                        AddAttribute(XMLNodeMO, 'TEMPSGLOBAL', '1');
+                                        AddAttribute(XMLNodeMO, 'TECHNICITE', '1');
+                                        AddAttribute(XMLNodeMO, 'METIER', 'T');
+                                        AddAttribute(XMLNodeMO, 'LIBELLEOPERATION', RecPackageBOM.Description);
+                                    end;
+
+                            // Autres types (Comment, G/L Account, Ext. Service, Resource) : ignorés
+                            end;
+                        until RecPackageBOM.Next() = 0;
+
+                    // TempRoot   = XMLDom  : nœud DMS où LZRF08T11V1 ajoute le nœud LZRF08
+                    // CurrentDMS = XMLNode : nœud FF courant qui contient les PR/MO
+                    // RqType     = 'LZRF47'
+                    //LZRF08T11V1(XMLNodeReq, XMLDom, XMLDom);
+                    LZRF08T11V1(XMLNodeFF, XMLDom, XMLNodeReq);  // ← corrigé
+
+                end else begin
+
+                    // Forfait non trouvé → CODE_FF = '99'
+                    AddAttribute(XMLRoot, 'Code', '0');
+                    AddAttribute(XMLRoot, 'TexteDMS', '');
+                    AddElement(XMLRoot, 'FF', XMLNode);
+                    AddAttribute(XMLNode, 'CODE_FF', '99');
+                    AddAttribute(XMLNode, 'LIGNE_DT_ID', LigneDtId);
+                    AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', '');
+                    AddAttribute(XMLNode, 'IDFORFAIT', IDForfait);
+                    AddAttribute(XMLNode, 'ReferenceFF', '');
+                    AddAttribute(XMLNode, 'LibelleFF', '');
+                    AddAttribute(XMLNode, 'PrixUnitaireHT', '0.00');
+                    AddAttribute(XMLNode, 'PrixUnitaireTTC', '0.00');
+                    AddAttribute(XMLNode, 'REMISE', '0.00');
+                    AddAttribute(XMLNode, 'TexteErreur', '');
+                end;
+            end;
+        end;
+    end;
+
+    procedure LZRF47T24V1(var XMLDom: XmlElement; XMLNodeReq: XmlElement; XMLNodeReqType11: XmlElement; XMLNodeReqType22: XmlElement)
+    var
+        // Attributs XML
+        IDFORFAIT_Attribute: Text;
+        TYPEFORFAIT_Attribute: Text;
+        LIGNE_DT_ID_Attribute: Text;
+        LIGNE_DT_ID_DMS_Attribute: Text;
+        DMS_ID_Value: Code[20];
+
+        // Records
+        RecPackageVersion: Record "Service Package Version";
+        RecPackageBOM: Record "Service Package Version Line";
+        RecPackage: Record "Service Package";
+        lRecServiceHeader: Record "Service Header EDMS";
+        lRecServiceLine: Record "Service Line EDMS";
+        lRecServiceJobLine: Record "Service Order Symptome  EDMS";
+
+        // Nœuds XML principaux
+        XMLRoot: XmlElement;
+        XMLNode: XmlElement;
+        XMLNodeFF: XmlElement;
+        XMLNodeMO: XmlElement;
+        XMLNodePR: XmlElement;
+
+        // NodeLists
+        XMLNodesLDT: XmlNodeList;
+        XMLNodesPR11: XmlNodeList;
+        XMLNodesLDT22: XmlNodeList;
+        XMLNodesMO22: XmlNodeList;
+
+        // Nœuds de travail
+        XMLNodeLDT: XmlNode;
+        XMLNodeLDTElem: XmlElement;
+        XMLNodeLDTElem22: XmlElement;
+        XMLNodePR11Item: XmlNode;
+        XMLNodeLDT22Item: XmlNode;
+        XMLNodeMO22Item: XmlNode;
+        TmpNode: XmlNode;
+
+        // Variables scalaires
+        IDFORFAIT_Attribute_value: Text[30];
+        ErrorInFF: Boolean;
+        RootFound: Boolean;
+        NodesFound: Boolean;
+        HasType11: Boolean;
+        HasType22: Boolean;
+    begin
+        // VALORISER UN FORFAIT
+
+        // Recherche du nœud LZRF47 dans XMLDom (qui est le nœud DMS TYPE=24)
+        RootFound := XMLDom.SelectSingleNode('LZRF47', TmpNode);
+        if RootFound then
+            XMLRoot := TmpNode.AsXmlElement();
+
+        // Récupération des LDT de la requête principale (DMS TYPE=24)
+        NodesFound := XMLNodeReq.SelectNodes('LDT', XMLNodesLDT);
+
+        // Récupération des PR du type 11
+        HasType11 := not XMLNodeReqType11.IsEmpty() and XMLNodeReqType11.SelectNodes('PR', XMLNodesPR11);
+
+        // Récupération des LDT du type 22
+        HasType22 := not XMLNodeReqType22.IsEmpty() and XMLNodeReqType22.SelectNodes('LDT', XMLNodesLDT22);
+
+        // Récupération du DOSSIER_DMS_ID
+        DMS_ID_Value := CopyStr(GetAttributeValue(XMLNodeReq, 'DOSSIER_DMS_ID'), 1, MaxStrLen(DMS_ID_Value));
+
+        if NodesFound and (XMLNodesLDT.Count > 0) then begin
+
+            if not RootFound then
+                AddElement(XMLDom, 'LZRF47', XMLRoot);
+
+            ErrorInFF := false;
+
+            // ── Branche 1 : dossier DMS existant ────────────────────────────────────
+            if (DMS_ID_Value <> '') and lRecServiceHeader.Get(lRecServiceHeader."Document Type"::Order, DMS_ID_Value) then begin
+
+                lRecServiceJobLine.SetRange("Document Type", lRecServiceHeader."Document Type");
+                lRecServiceJobLine.SetRange("Document No.", DMS_ID_Value);
+                lRecServiceJobLine.SetFilter("Package No.", '<>%1', '');
+
+                if lRecServiceJobLine.FindSet() then
+                    repeat
+                        AddElement(XMLRoot, 'FF', XMLNode);
+                        AddAttribute(XMLNode, 'CODE_FF', '2');
+                        AddAttribute(XMLNode, 'LIGNE_DT_ID', lRecServiceJobLine."Symptome Code");
+                        AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', Format(lRecServiceJobLine."Task No."));
+                        AddAttribute(XMLNode, 'IDFORFAIT',
+                            lRecServiceJobLine."Package No." + lRecServiceJobLine."SBOX CodeTypeVehicule");
+                        AddAttribute(XMLNode, 'ReferenceFF',
+                            lRecServiceJobLine."Package No." + lRecServiceJobLine."SBOX CodeTypeVehicule");
+                        AddAttribute(XMLNode, 'LibelleFF', lRecServiceJobLine.Commentaire);
+
+                        // Prix directement depuis Service Job Line
+                        AddAttribute(XMLNode, 'PrixUnitaireHT',
+                           FormatDecimalXML(lRecServiceJobLine."SBOX PrixHT Forfait"));//, 0, '<Precision,2:2><Standard Format,2>'));
+                        AddAttribute(XMLNode, 'PrixUnitaireTTC',
+                            FormatDecimalXML(lRecServiceJobLine."SBOX PrixTTC Forfait"));//, 0, '<Precision,2:2><Standard Format,2>'));
+
+                        AddAttribute(XMLNode, 'TexteErreur', '');
+
+                        // PR / MO depuis Service Line
+                        lRecServiceLine.SetRange("Document Type", lRecServiceLine."Document Type"::Order);
+                        lRecServiceLine.SetRange("Document No.", DMS_ID_Value);
+                        lRecServiceLine.SetRange("Package No.", lRecServiceJobLine."Package No.");
+
+                        if lRecServiceLine.FindSet() then
+                            repeat
+                                if lRecServiceLine.Type = lRecServiceLine.Type::Item then begin
+                                    AddElement(XMLNode, 'PR', XMLNodePR);
+                                    AddAttribute(XMLNodePR, 'CODEIMPUTATIONDMS_PR', lRecServiceLine."Sell-to Customer No.");
+                                    AddAttribute(XMLNodePR, TypeXX + '_PR',
+                                        Format(CheckTypeImputationByCustomer(lRecServiceLine."Sell-to Customer No.")));
+                                    AddAttribute(XMLNodePR, 'REFERENCE_PR', SetItemNo(lRecServiceLine."No."));
+                                    AddAttribute(XMLNodePR, 'LIBELLE_PR', lRecServiceLine.Description);
+                                    AddAttribute(XMLNodePR, 'TYPE_PR', '2');
+                                end else begin
+                                    AddElement(XMLNode, 'MO', XMLNodeMO);
+                                    AddAttribute(XMLNodeMO, 'CODEIMPUTATIONDMS_MO', lRecServiceLine."Sell-to Customer No.");
+                                    AddAttribute(XMLNodeMO, TypeXX + '_MO',
+                                        Format(CheckTypeImputationByCustomer(lRecServiceLine."Sell-to Customer No.")));
+                                    AddAttribute(XMLNodeMO, 'CODEOPERATION', lRecServiceLine."No.");
+                                    AddAttribute(XMLNodeMO, 'TYPEOPERATION', '2');
+                                    AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE', '');
+                                    AddAttribute(XMLNodeMO, 'TEMPSGLOBAL',
+                                        Format(lRecServiceLine.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                    AddAttribute(XMLNodeMO, 'TECHNICITE', '1');
+                                    AddAttribute(XMLNodeMO, 'METIER', 'M');
+                                    AddAttribute(XMLNodeMO, 'LIBELLEOPERATION', lRecServiceLine.Description);
+                                end;
+                            until lRecServiceLine.Next() = 0;
+
+                    until lRecServiceJobLine.Next() = 0;
+
+            end else begin
+
+                // ── Branche 2 : traitement depuis le XML entrant ─────────────────────
+                foreach XMLNodeLDT in XMLNodesLDT do begin
+
+                    XMLNodeLDTElem := XMLNodeLDT.AsXmlElement();
+
+                    if not XMLNodeLDTElem.SelectSingleNode('FF', TmpNode) then
+                        continue;
+                    XMLNodeFF := TmpNode.AsXmlElement();
+
+                    IDFORFAIT_Attribute_value := CopyStr(GetAttributeValue(XMLNodeFF, 'IDFORFAIT'), 1, MaxStrLen(IDFORFAIT_Attribute_value));
+                    LIGNE_DT_ID_Attribute := GetAttributeValue(XMLNodeFF, 'LIGNE_DT_ID');
+                    LIGNE_DT_ID_DMS_Attribute := GetAttributeValue(XMLNodeFF, 'LIGNE_DT_ID_DMS');
+                    TYPEFORFAIT_Attribute := GetAttributeValue(XMLNodeFF, 'TYPEFORFAIT');
+
+                    RecPackage.Reset();
+                    RecPackage.SetRange("No.", IDFORFAIT_Attribute_value);
+
+                    // ── Cas A : forfait SBOX inconnu (type 1) ───────────────────────────
+                    if (not RecPackage.FindSet()) and (TYPEFORFAIT_Attribute = '1') and (IDFORFAIT_Attribute_value <> '') then begin
+
+                        AddElement(XMLRoot, 'FF', XMLNode);
+                        AddAttribute(XMLNode, 'CODE_FF', '2');
+                        AddAttribute(XMLNode, 'LIGNE_DT_ID', LIGNE_DT_ID_Attribute);
+                        AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', '');
+                        AddAttribute(XMLNode, 'IDFORFAIT', GetAttributeValue(XMLNodeFF, 'IDFORFAIT'));
+                        AddAttribute(XMLNode, 'ReferenceFF', GetAttributeValue(XMLNodeFF, 'IDFORFAIT'));
+                        AddAttribute(XMLNode, 'LibelleFF', GetAttributeValue(XMLNodeFF, 'LIBELLEFORFAIT'));
+                        AddAttribute(XMLNode, 'PrixUnitaireHT', GetAttributeValue(XMLNodeFF, 'PRIXHT_FORFAIT'));
+                        AddAttribute(XMLNode, 'PrixUnitaireTTC', GetAttributeValue(XMLNodeFF, 'PRIXTTC_FORFAIT'));
+                        AddAttribute(XMLNode, 'TexteErreur', '');
+
+                        // Type 11 – PR
+                        if HasType11 then
+                            foreach XMLNodePR11Item in XMLNodesPR11 do
+                                if GetAttributeValue(XMLNodePR11Item.AsXmlElement(), 'LIGNE_DT_ID') = LIGNE_DT_ID_Attribute then begin
+                                    AddElement(XMLNode, 'PR', XMLNodePR);
+                                    AddAttribute(XMLNodePR, 'CODEIMPUTATIONDMS_PR',
+                                        GetAttributeValue(XMLNodePR11Item.AsXmlElement(), 'CODEIMPUTATIONDMS_PR'));
+                                    AddAttribute(XMLNodePR, TypeXX + '_PR',
+                                        GetAttributeValue(XMLNodePR11Item.AsXmlElement(), TypeXX + '_PR'));
+                                    AddAttribute(XMLNodePR, 'REFERENCE_PR',
+                                        GetAttributeValue(XMLNodePR11Item.AsXmlElement(), 'REFERENCE_PR'));
+                                    AddAttribute(XMLNodePR, 'LIBELLE_PR',
+                                        GetAttributeValue(XMLNodePR11Item.AsXmlElement(), 'LIBELLE_PR'));
+                                    AddAttribute(XMLNodePR, 'TYPE_PR', '2');
+                                end;
+
+                        // Type 22 – MO
+                        if HasType22 then
+                            foreach XMLNodeLDT22Item in XMLNodesLDT22 do begin
+                                XMLNodeLDTElem22 := XMLNodeLDT22Item.AsXmlElement();
+                                XMLNodeLDTElem22.SelectNodes('MO', XMLNodesMO22);
+                                foreach XMLNodeMO22Item in XMLNodesMO22 do
+                                    if GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'LIGNE_DT_ID') = LIGNE_DT_ID_Attribute then begin
+                                        AddElement(XMLNode, 'MO', XMLNodeMO);
+                                        AddAttribute(XMLNodeMO, 'CODEIMPUTATIONDMS_MO',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'CODEIMPUTATIONDMS_MO'));
+                                        AddAttribute(XMLNodeMO, TypeXX + '_MO',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), TypeXX + '_MO'));
+                                        AddAttribute(XMLNodeMO, 'CODEOPERATION',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'CODEOPERATION'));
+                                        AddAttribute(XMLNodeMO, 'TYPEOPERATION', '2');
+                                        AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'CODETYPEVEHICULE'));
+                                        AddAttribute(XMLNodeMO, 'TEMPSGLOBAL',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'TEMPSGLOBAL'));
+                                        AddAttribute(XMLNodeMO, 'TECHNICITE',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'TECHNICITE'));
+                                        AddAttribute(XMLNodeMO, 'METIER',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'METIER'));
+                                        AddAttribute(XMLNodeMO, 'LIBELLEOPERATION',
+                                            GetAttributeValue(XMLNodeMO22Item.AsXmlElement(), 'LIBELLEOPERATION'));
+                                    end;
+                            end;
+
+                        LZRF08T11V1(XMLNodeFF, XMLDom, XMLNodeReq);
+
+                        // ── Cas B : forfait trouvé dans RecPackage ───────────────────────────
+                    end else if RecPackage.FindSet() then begin
+
+                        RecPackageVersion.Reset();
+                        RecPackageVersion.SetFilter("Package No.", IDFORFAIT_Attribute_value);
+
+                        if RecPackageVersion.FindLast() then begin
+
+                            AddElement(XMLRoot, 'FF', XMLNode);
+                            AddAttribute(XMLNode, 'CODE_FF', '2');
+                            AddAttribute(XMLNode, 'LIGNE_DT_ID', LIGNE_DT_ID_Attribute);
+                            AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', '');
+                            AddAttribute(XMLNode, 'IDFORFAIT', RecPackageVersion."Package No.");
+                            AddAttribute(XMLNode, 'ReferenceFF', RecPackageVersion."Package No.");
+                            AddAttribute(XMLNode, 'LibelleFF', RecPackageVersion.Description);
+                            AddAttribute(XMLNode, 'PrixUnitaireHT',
+                                Format(RecPackageVersion."Amount", 0, '<Precision,2:2><Standard Format,2>'));
+                            AddAttribute(XMLNode, 'PrixUnitaireTTC',
+                                Format(RecPackageVersion."Amount", 0, '<Precision,2:2><Standard Format,2>'));
+                            AddAttribute(XMLNode, 'TexteErreur', '');
+
+                            RecPackageBOM.Reset();
+                            RecPackageBOM.SetFilter("Package No.", RecPackageVersion."Package No.");
+                            RecPackageBOM.SetFilter("Version No.", '%1', RecPackageVersion."Version No.");
+
+                            if RecPackageBOM.FindFirst() then
+                                repeat
+                                    if RecPackageBOM.Type = RecPackageBOM.Type::Item then begin
+                                        AddElement(XMLNode, 'PR', XMLNodePR);
+                                        AddAttribute(XMLNodePR, 'CODEIMPUTATIONDMS_PR', '');
+                                        AddAttribute(XMLNodePR, TypeXX + '_PR', '');
+                                        AddAttribute(XMLNodePR, 'REFERENCE_PR', SetItemNo(RecPackageBOM."No."));
+                                        AddAttribute(XMLNodePR, 'LIBELLE_PR', RecPackageBOM.Description);
+                                        AddAttribute(XMLNodePR, 'TYPE_PR', '2');
+                                        AddAttribute(XMLNodePR, 'QuantiteEnCommande',
+                                            Format(RecPackageBOM.Quantity, 0, '<Precision,2:2><Standard Format,2>'));
+                                    end else begin
+                                        AddElement(XMLNode, 'MO', XMLNodeMO);
+                                        AddAttribute(XMLNodeMO, 'CODEIMPUTATIONDMS_MO', '');
+                                        AddAttribute(XMLNodeMO, TypeXX + '_MO', '');
+                                        AddAttribute(XMLNodeMO, 'CODEOPERATION', RecPackageBOM."No.");
+                                        AddAttribute(XMLNodeMO, 'TYPEOPERATION', '2');
+                                        AddAttribute(XMLNodeMO, 'CODETYPEVEHICULE', '');
+                                        AddAttribute(XMLNodeMO, 'TEMPSGLOBAL', '1');
+                                        AddAttribute(XMLNodeMO, 'TECHNICITE', '1');
+                                        AddAttribute(XMLNodeMO, 'METIER', 'T');
+                                        AddAttribute(XMLNodeMO, 'LIBELLEOPERATION', RecPackageBOM.Description);
+                                    end;
+                                until RecPackageBOM.Next() = 0;
+
+                            LZRF08T11V1(XMLNodeFF, XMLDom, XMLNodeReq);
+                        end;
+
+                        // ── Cas C : forfait introuvable ──────────────────────────────────────
+                    end else begin
+                        ErrorInFF := true;
+                        AddElement(XMLRoot, 'FF', XMLNode);
+                        AddAttribute(XMLNode, 'CODE_FF', '99');
+                        AddAttribute(XMLNode, 'LIGNE_DT_ID', LIGNE_DT_ID_Attribute);
+                        AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', '');
+                        AddAttribute(XMLNode, 'IDFORFAIT', IDFORFAIT_Attribute_value);
+                        AddAttribute(XMLNode, 'ReferenceFF', '');
+                        AddAttribute(XMLNode, 'LibelleFF', '');
+                        AddAttribute(XMLNode, 'PrixUnitaireHT', '0.00');
+                        AddAttribute(XMLNode, 'PrixUnitaireTTC', '0.00');
+                        AddAttribute(XMLNode, 'REMISE', '0.00');
+                        AddAttribute(XMLNode, 'TexteErreur', '');
+                    end;
+
+                end; // foreach LDT
+            end; // branche 2
+
+            // ── Gestion du code retour racine ────────────────────────────────────────
+            if ErrorInFF then begin
+                AddAttribute(XMLRoot, 'Code', '52');
+                AddAttribute(XMLRoot, 'TexteDMS', 'forfait inexistent');
+            end else begin
+                AddAttribute(XMLRoot, 'Code', '0');
+                AddAttribute(XMLRoot, 'TexteDMS', '');
+            end;
+
+        end; // if NodesFound
+    end;
+
+    // Récupère un élément enfant par nom.
+    /// SelectSingleNode est disponible sur XmlNode (pas directement sur XmlElement),
+    /// donc on passe par XmlNode intermédiaire.
+    local procedure GetChildElement(ParentElem: XmlElement; ChildName: Text; var ChildElem: XmlElement): Boolean
+    var
+        TmpNode: XmlNode;
+    begin
+        if ParentElem.SelectSingleNode(ChildName, TmpNode) then begin
+            ChildElem := TmpNode.AsXmlElement();
+            exit(true);
+        end;
+        exit(false);
+    end;
+
+    procedure onConfirmInsertSPVersion(var SPVersion: Record "Service Package Version"; quote: Record "Service Header EDMS") result: Text
+    var
+        SPVersionSpec: Record "Service Package Version Line";
+        ServicePackage: Record "Service Package";
+        VehicleServicePlanStageTmp_CS: Record "Vehicle Service Plan Stage";
+    begin
+        if SPVersion."Package No." = '' then
+            exit('Error: SPVersion "Package No." is empty.');
+
+        if not ServicePackage.Get(SPVersion."Package No.") then
+            exit('Error: Service Package not found.');
+
+        if ServicePackage.Blocked then
+            exit('Error: Service Package is blocked.');
+
+        SPVersionSpec.Reset();
+        SPVersionSpec.SetRange("Package No.", SPVersion."Package No.");
+        SPVersionSpec.SetRange("Version No.", SPVersion."Version No.");
+
+        if not SPVersionSpec.FindSet() then
+            exit('Error: No records found in SPVersionSpec.');
+
+        repeat
+            SPVersionSpec.SetCurrPlanStage(VehicleServicePlanStageTmp_CS);
+            SPVersionSpec.CreateServLine(quote."Document Type", quote."No.");
+        until SPVersionSpec.Next() = 0;
+
+        exit('Success: onConfirmInsertSPVersion executed successfully.');
+    end;
+
+    /*   local procedure CreateItem(ItemNo: Code[20]; ldescription: Text[100]; lDescription2: Text[50])
+      Var
+          PurchasesPayablesSetup: Record "Purchases & Payables Setup";
+          ItemTempl: Record "Item Templ.";
+          NewItem: Record Item;
+          ItemUnitofMeasure: Record "Item Unit of Measure";
+      begin
+          PurchasesPayablesSetup.get();
+          if ItemTempl.get(PurchasesPayablesSetup."STF Templ. Item") then begin
+              NewItem.INIT();
+              NewItem."No." := ItemNo;
+              NewItem.INSERT();
+              NewItem.Description := ldescription;
+              NewItem."Description 2" := ldescription2;
+              //---Ajout ItemUnitOfMeasure
+              IF NOT ItemUnitofMeasure.GET(ItemNo, ItemTempl."Base Unit of Measure") THEN BEGIN
+                  ItemUnitofMeasure.INIT();
+                  ItemUnitofMeasure."Item No." := ItemNo;
+                  ItemUnitofMeasure.Code := ItemTempl."Base Unit of Measure";
+                  ItemUnitofMeasure."Qty. per Unit of Measure" := 1;
+                  ItemUnitofMeasure.INSERT();
+              END;
+
+              //---
+              NewItem.VALIDATE("Base Unit of Measure", ItemTempl."Base Unit of Measure");
+              NewItem."Inventory Posting Group" := ItemTempl."Inventory Posting Group";
+              //  Gitem_New."Sales Profit group" := 'ACH_PR';
+              NewItem."Costing Method" := ItemTempl."Costing Method";
+              //NewItem."Cost is Adjusted" := TRUE;
+              NewItem."Gen. Prod. Posting Group" := ItemTempl."Gen. Prod. Posting Group";
+              NewItem."VAT Prod. Posting Group" := ItemTempl."VAT Prod. Posting Group";
+              //Gitem_New."Global Dimension 2 Code":=Gvendor."Phone No. 2";
+              NewItem.VALIDATE("Sales Unit of Measure", ItemTempl."Base Unit of Measure");
+              NewItem.VALIDATE("Purch. Unit of Measure", ItemTempl."Base Unit of Measure");
+              NewItem."Item Category Code" := ItemTempl."Item Category Code";
+              NewItem."Manufacturer Code" := ItemTempl."Manufacturer Code";
+
+
+              //Gitem_New."Make Code":=Gvendor."Phone No. 2";
+              NewItem."Item Type" := NewItem."Item Type"::Item;
+              NewItem."DLT Status" := NewItem."DLT Status"::Approved;
+              //Gitem_New.Equipementier:=TRUE;
+
+
+              NewItem.MODIFY(TRUE)
+          end;
+      end;
+
+    */
+    procedure FindPriceMO(CODEIMPUTATIONDMS: code[20]; CODEOPERATION_attribute: code[20]; var UnitPrice: Decimal; var UnitPriceTTC: Decimal; var ErrorMsg: Text): Boolean
+    var
+        Vcustomer: Record Customer;
+        VLabor: Record "Service Labor";
+        VATPostingSetup: Record "VAT Posting Setup";
+        TempServicePrice: Record "Service Price" temporary;
+        TempSalesPrice: Record "Sales Price DMS" temporary;
+        "SalesPriceCalcMgtEDMS": Codeunit "Sales Price Calc. Mgt. EDMS";
+        SBManagement: Codeunit "STF Service Box Mgt";
+    begin
+        ErrorMsg := '';
+        UnitPrice := 0;
+        UnitPriceTTC := 0;
+        Clear(VLabor);
+        Clear(Vcustomer);
+        Clear(VATPostingSetup);
+        if not SBManagement.CheckLaborNo(CODEOPERATION_attribute, VLabor, ErrorMsg) then
+            exit(false);
+        if not SBManagement.CheckCustomerNo(CODEIMPUTATIONDMS, Vcustomer, ErrorMsg) then
+            exit(false);
+        TempServicePrice.Reset();
+        TempServicePrice.DeleteAll();
+        SalesPriceCalcMgtEDMS.SetUoM(1, 1);
+        SalesPriceCalcMgtEDMS.FindServLaborPrice(TempServicePrice, Vcustomer."No.", '', Vcustomer."Customer Price Group", '', VLabor."No.", '',
+                      WorkDate(), false, VLabor."Price Group Code", VLabor."Unit of Measure Code",
+                      '', '', '');
+        SalesPriceCalcMgtEDMS.CopyServicePriceToSalesPrice(TempServicePrice, TempSalesPrice);
+        SalesPriceCalcMgtEDMS.CalcBestUnitPrice(TempSalesPrice);
+
+        UnitPrice := TempSalesPrice."Unit Price";
+
+        if VATPostingSetup.Get(Vcustomer."VAT Bus. Posting Group", VLabor."VAT Prod. Posting Group") then
+            //UnitPriceTTC := UnitPrice * ((1 + VATPostingSetup."VAT %") / 100);
+            UnitPriceTTC := UnitPrice * (1 + (VATPostingSetup."VAT %" / 100));
+        exit(true);
     end;
 
     var
@@ -4180,6 +7216,11 @@ codeunit 75101 "Business Layer"
         PARAMDMS: Text[50];
         TypeXX: Text[30];
         eDMSSetup: Record "STF Servicebox Setup";
+        RecLocation: Record Location;
+        RecServiceLocation: Record Location;
+        RecUserSetup: Record "User Setup";
+        RecWarehouseEmployee: Record "Warehouse Employee";
+        CodeMarkSBOX: Code[10];
 
 }
 

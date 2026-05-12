@@ -288,9 +288,9 @@ codeunit 75100 "SBox External WS"
                     BizLayer.LZRC07T05V1(CLIENT_DMS_ID, RootResp, CurrentDMS, RqType);
                 /* '06':
                     BizLayer.LZRC08T06V1(XMLDomResp, CurrentDMS, RqType);
-                */
+                
                 '09':
-                    BizLayer.LZRC23T09V1(VEHICULE_DMS_ID, CurrentDMS, RqType);
+                    BizLayer.LZRC23T09V1(VEHICULE_DMS_ID, CurrentDMS, RqType);*/
                 /* '13':
                     BizLayer.LZRF10T13(XMLDomResp, CurrentDMS);
                 '22':
@@ -346,6 +346,9 @@ codeunit 75100 "SBox External WS"
         SingleResponseText: Text;
         TempRoot: XmlElement;
         TempDom: XmlDocument;
+        NodeReqType11: XmlElement;
+        NodeReqType22: XmlElement;
+        TempElem: XmlElement;
     begin
         // Lecture du XML entrant
         if not XmlDocument.ReadFrom(InStreamXml, XMLDomReq) then begin
@@ -401,12 +404,32 @@ codeunit 75100 "SBox External WS"
                 '53':
                     BizLayer.LZRF53T53V1(TempRoot, CurrentDMS);
                 '11':
-                    BizLayer.LZRF08T11(TempRoot, CurrentDMS, RqType);
+                    BizLayer.LZRF08T11V1(CurrentDMS, TempRoot, CurrentDMS);
                 '23':
-                    BizLayer.LZRF46T23V1(TempRoot, CurrentDMS, RqType);
+                    BizLayer.LZRF46T23V1(TempRoot, CurrentDMS, CLIENT_DMS_ID);
                 '22':
                     BizLayer.LZRF45T22V1(TempRoot, CurrentDMS, RqType);
+                /*  '24':
+                     BizLayer.LZRF47T24V1(TempRoot, CurrentDMS);*/
 
+                '24':
+                    begin
+                        // Recherche des nœuds TYPE=11 et TYPE=22 dans la liste des DMS du même message
+                        NodeReqType11 := XmlElement.Create('Empty');
+                        NodeReqType22 := XmlElement.Create('Empty');
+
+                        foreach DMSNode in DMSNodeList do begin
+                            TempElem := DMSNode.AsXmlElement();
+                            if GetAttributeValue(TempElem, 'TYPE') = '11' then
+                                NodeReqType11 := TempElem;
+                            if GetAttributeValue(TempElem, 'TYPE') = '22' then
+                                NodeReqType22 := TempElem;
+                        end;
+
+                        BizLayer.LZRF47T24V1(TempRoot, CurrentDMS, NodeReqType11, NodeReqType22);
+                    end;
+                '99':
+                    BizLayer.CheckStatus(TempDom);
             /* else begin
                  RootResp.SetAttribute('CODE', '-4');
                  RootResp.SetAttribute('TexteDMS', 'Type inconnu');

@@ -4,6 +4,8 @@ tableextension 75102 "STF Sales Line SB" extends "Sales Line"//36
     {
         field(75100; "Line LDT"; Code[20]) { Caption = 'Ligne LDT'; DataClassification = CustomerContent; }
         field(75101; "Line LDT Filter"; Code[20]) { Caption = 'Ligne LDT Filter'; DataClassification = CustomerContent; }
+        field(75102; "SBOX MO"; Code[20]) { Caption = 'SBOX MO'; DataClassification = CustomerContent; }
+
 
 
     }
