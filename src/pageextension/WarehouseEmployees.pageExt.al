@@ -12,6 +12,11 @@ pageextension 75100 "STF Warehouse Employees" extends "Warehouse Employees" //73
             {
                 ApplicationArea = All;
             }
+
+            field("Service Location Code"; Rec."Service Location Code")
+            {
+                ApplicationArea = All;
+            }
         }
     }
 }

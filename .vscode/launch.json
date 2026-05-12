@@ -38,7 +38,25 @@
             "tenant": "default",
             "schemaUpdateMode": "ForceSync",
             "port": 6349
-        }
+        },
+        {
+            "name": "BC60",
+            "request": "launch",
+            "type": "al",
+            "environmentType": "OnPrem",
+            "server": "http://localhost:8080/BC260/",
+            "serverInstance": "BC260",
+            "authentication": "Windows",
+            // "username": "ROUKAYA",
+            //"password": "Delt@S0ft", 
+            "breakOnError": "All",
+            "launchBrowser": true,
+            //"enableLongRunningSqlStatements": true,
+            //"enableSqlInformationDebugger": true,
+            "usePublicURLFromServer": true,
+            "port": 7049,
+            "schemaUpdateMode": "ForceSync"
+        },
 
     ]
 }
