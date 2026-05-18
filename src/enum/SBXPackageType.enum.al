@@ -1,6 +1,6 @@
-enum 75100 "SBX Package Type"  //50027
+enum 75500 "SBX Package Type"  //50027
 {
-    value(75000; "SBOX")
+    value(75500; "SBOX")
     {
         Caption = 'SBOX', Locked = true;
     }

@@ -1,4 +1,4 @@
-/* pageextension 75102 "STF Purchases & Payables Setup" extends "Purchases & Payables Setup"//460
+/* pageextension 75502 "STF Purchases & Payables Setup" extends "Purchases & Payables Setup"//460
 {
     layout
     {

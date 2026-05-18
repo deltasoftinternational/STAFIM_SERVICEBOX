@@ -1,4 +1,4 @@
-/* tableextension 75107 "STF Purchases & Payables Setup" extends "Purchases & Payables Setup"//312
+/* tableextension 75507 "STF Purchases & Payables Setup" extends "Purchases & Payables Setup"//312
 {
     fields
     {

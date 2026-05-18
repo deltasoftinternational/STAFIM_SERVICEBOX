@@ -1,4 +1,4 @@
-table 75100 "SBX Package Line"
+table 75500 "SBX Package Line"
 {
     Caption = 'SBOX Package Line';
     DataClassification = CustomerContent;

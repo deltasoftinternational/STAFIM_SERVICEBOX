@@ -1,4 +1,4 @@
-pageextension 75101 "SBX SBOX User Setup Card" extends "User Setup Card" //25006075
+pageextension 75503 "SBX SBOX User Setup Card" extends "User Setup Card" //25006075
 {
     layout
     {
