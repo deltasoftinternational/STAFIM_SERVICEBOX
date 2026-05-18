@@ -1,0 +1,18 @@
+{
+    "al.codeAnalyzers": [
+       // "${PerTenantExtensionCop}",
+       // "${CodeCop}",
+        // "${UICop}"
+    ],
+    "al.enableCodeAnalysis": true,
+    "al.backgroundCodeAnalysis": "Project",
+    "CRS.ObjectNamePrefix": "SBX ",
+    "CRS.RemovePrefixFromFilename": true,
+    "CRS.FileNamePattern": "SBX<ObjectNameShort>.<ObjectType>.al",
+    "CRS.FileNamePatternExtensions": "<BaseId>-SBX<ObjectNameShort>.<ObjectTypeShortPascalCase>.al",
+    "CRS.FileNamePatternPageCustomizations": "SBX<ObjectNameShort>.<ObjectType>Ext.al",
+    "CRS.OnSaveAlFileAction": "Rename",
+    "CRS.DisableDefaultAlSnippets": true,
+    "CRS.AlSubFolderName": "src",
+    "al.defaultLaunchConfigurationName": "Docker"
+}

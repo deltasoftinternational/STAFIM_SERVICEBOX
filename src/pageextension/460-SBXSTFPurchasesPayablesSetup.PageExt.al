@@ -6,7 +6,7 @@
         addlast(General)
         {
 
-            field("STF Templ. Item"; Rec."STF Templ. Item")
+            field("SBX STF Templ. Item"; Rec."STF Templ. Item")
             {
                 ApplicationArea = All;
             }

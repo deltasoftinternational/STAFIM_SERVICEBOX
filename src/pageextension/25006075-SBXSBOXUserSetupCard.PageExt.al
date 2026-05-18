@@ -1,10 +1,10 @@
-pageextension 75101 "STF SBOX User Setup Card" extends "User Setup Card" //25006075
+pageextension 75101 "SBX SBOX User Setup Card" extends "User Setup Card" //25006075
 {
     layout
     {
         addlast("General")
         {
-            field("ServiceBOX Code"; Rec."ServiceBOX Code")
+            field("SBX ServiceBOX Code"; Rec."SBX ServiceBOX Code")
             {
                 applicationArea = All;
                 ToolTip = 'Specifies the value of the ServiceBOX Code field';

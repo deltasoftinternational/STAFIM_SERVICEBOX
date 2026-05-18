@@ -11,7 +11,7 @@
   "url": "",
   "logo": "",
   "dependencies": [
-   {
+    {
       "id": "d5848a24-3146-46bc-ba00-4f4c47ab38bb",
       "publisher": "Deltasoft International",
       "name": "STAFIM",
@@ -23,13 +23,13 @@
       "name": "ELVA DMS BC26",
       "version": "1.0.0.0"
     },
-     {
+    {
       "id": "0bfb933e-6382-4eca-9db5-bdda953de82b",
       "publisher": "Deltasoft International",
       "name": "ELVA STD BC26",
       "version": "1.0.0.0"
     },
-     {
+    {
       "id": "840d69c1-a2ae-4b41-bfb1-4b23af2cf237",
       "publisher": "DeltaSoft International",
       "name": "StandardTunisien",
@@ -41,8 +41,8 @@
   "application": "26.0.0.0",
   "idRanges": [
     {
-      "from": 75100,
-      "to": 75110
+      "from": 50000,
+      "to": 99999
     }
   ],
   "resourceExposurePolicy": {
@@ -51,6 +51,7 @@
     "includeSourceInSymbolFile": true
   },
   "runtime": "15.0",
+  "target": "Cloud",
   "features": [
     "NoImplicitWith"
   ]

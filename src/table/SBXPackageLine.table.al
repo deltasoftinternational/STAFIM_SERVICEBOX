@@ -1,9 +1,4 @@
-// ============================================================
-// TABLE 60213 - SBOX Package Line (migration de Record 60213)
-// Table TRANSACTIONNELLE : liée à un Service Header (Document)
-// Remplace l'ancienne table C/AL Record 60213 "RecServiceLineBOM"
-// ============================================================
-table 75100 "SBOX Package Line" //60213
+table 75100 "SBX Package Line"
 {
     Caption = 'SBOX Package Line';
     DataClassification = CustomerContent;

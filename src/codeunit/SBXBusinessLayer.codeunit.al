@@ -1,4 +1,4 @@
-codeunit 75101 "Business Layer"
+codeunit 75101 "SBX Business Layer"
 {
 
     local procedure MapTypeClient(TypeCust: Integer): Integer
@@ -1393,7 +1393,7 @@ codeunit 75101 "Business Layer"
             qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'));
 
         RecSalesLine.Validate(Quantity, qte);
-        RecSalesLine."Line LDT" := LigneDT;
+        RecSalesLine."SBX Line LDT" := LigneDT;
         RecSalesLine.Insert(true);
     end;
 
@@ -1415,8 +1415,8 @@ codeunit 75101 "Business Layer"
         RecSalesLine."Line No." := GetNextSalesLineNo(RecSalesHeader);
         RecSalesLine.Validate(Type, RecSalesLine.Type::Item);
         RecSalesLine.Validate("No.", item."No.");
-        RecSalesLine."Line LDT" := LigneDT;
-        RecSalesLine."Line LDT Filter" := LigneDT;
+        RecSalesLine."SBX Line LDT" := LigneDT;
+        RecSalesLine."SBX Line LDT Filter" := LigneDT;
         //if Evaluate(qte, ConvertStr(GetAttributeValue(XMLNodePR, 'QuantiteEnCommande'), '.', ',')) then;
 
         qte := ParseDecimal(GetAttributeValue(XMLNodePR, 'QuantiteCommandee'));
@@ -1481,16 +1481,16 @@ codeunit 75101 "Business Layer"
         Clear(RecUserSetup);
         RecUserSetup.Reset();
 
-        RecUserSetup.SetRange("ServiceBOX Code", Utilisateur);
+        RecUserSetup.SetRange("SBX ServiceBOX Code", Utilisateur);
 
         if RecUserSetup.FindFirst() then begin
             RecWarehouseEmployee.Reset();
             RecWarehouseEmployee.SetRange("User ID", RecUserSetup."User ID");
-            RecWarehouseEmployee.SetRange("Service BOX Location", true);
+            RecWarehouseEmployee.SetRange("SBX Service BOX Location", true);
 
             if RecWarehouseEmployee.Count > 1 then begin
                 if PostCode <> '' then
-                    RecWarehouseEmployee.SetRange("Service BOX Post", PostCode);
+                    RecWarehouseEmployee.SetRange("SBX Service BOX Post", PostCode);
             end;
 
             if RecWarehouseEmployee.FindFirst() then begin
@@ -1499,8 +1499,8 @@ codeunit 75101 "Business Layer"
                 if RecLocation.Get(RecWarehouseEmployee."Location Code") then begin
 
                     // 🔹 Nouvelle Service Location
-                    if RecWarehouseEmployee."Service Location Code" <> '' then
-                        RecServiceLocation.Get(RecWarehouseEmployee."Service Location Code");
+                    if RecWarehouseEmployee."SBX Service Location Code" <> '' then
+                        RecServiceLocation.Get(RecWarehouseEmployee."SBX Service Location Code");
 
                     exit(true);
                 end;
@@ -1509,14 +1509,14 @@ codeunit 75101 "Business Layer"
                 // fallback
                 RecWarehouseEmployee.Reset();
                 RecWarehouseEmployee.SetRange("User ID", RecUserSetup."User ID");
-                RecWarehouseEmployee.SetRange("Service BOX Location", true);
+                RecWarehouseEmployee.SetRange("SBX Service BOX Location", true);
 
                 if RecWarehouseEmployee.FindFirst() then
                     if RecLocation.Get(RecWarehouseEmployee."Location Code") then begin
 
                         // 🔹 Nouvelle Service Location (fallback aussi)
-                        if RecWarehouseEmployee."Service Location Code" <> '' then
-                            RecServiceLocation.Get(RecWarehouseEmployee."Service Location Code");
+                        if RecWarehouseEmployee."SBX Service Location Code" <> '' then
+                            RecServiceLocation.Get(RecWarehouseEmployee."SBX Service Location Code");
 
                         exit(true);
                     end;
@@ -2786,7 +2786,7 @@ codeunit 75101 "Business Layer"
 
                     // VEHICULE — XMLNodeVehicule dédié [FIX-4]
                     RecVehicle.Reset();
-                    RecVehicle.SetRange(VIN, RecSaleHeader."VIN SBOX");
+                    RecVehicle.SetRange(VIN, RecSaleHeader."SBX VIN SBOX");
                     if RecVehicle.FindFirst() then begin
                         AddElement(XMLRoot, 'VEHICULE', XMLNodeVehicule);
                         AddAttribute(XMLNodeVehicule, 'VEHICULE_DMS_ID', RecVehicle.VIN);
@@ -2813,10 +2813,10 @@ codeunit 75101 "Business Layer"
                             AddElement(XMLNodeVehicule, 'LDT', XMLNodeLDT);  // LDT enfant de VEHICULE ✅
                             AddAttribute(XMLNodeLDT, TypeXX + '_LDT', '1');
                             AddAttribute(XMLNodeLDT, 'CODEIMPUTATION_LDT', RecSaleHeader."Sell-to Customer No.");
-                            AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', RecSaleLine."Line LDT");
+                            AddAttribute(XMLNodeLDT, 'LIGNE_DT_ID', RecSaleLine."SBX Line LDT");
                             repeat
                                 AddElement(XMLNodeLDT, 'PR', XMLNodePR);
-                                AddAttribute(XMLNodePR, 'LIGNE_DT_ID', RecSaleLine."Line LDT");
+                                AddAttribute(XMLNodePR, 'LIGNE_DT_ID', RecSaleLine."SBX Line LDT");
                                 AddAttribute(XMLNodePR, 'LIGNE_DT_ID_DMS', Format(RecSaleLine."Line No."));
                                 AddAttribute(XMLNodePR, TypeXX + '_PR', '');
                                 AddAttribute(XMLNodePR, 'CODEIMPUTATION_PR', RecSaleHeader."Bill-to Customer No.");
@@ -3015,8 +3015,8 @@ codeunit 75101 "Business Layer"
                                             AddAttribute(XMLNodeMO, 'LIGNE_DT_ID_DMS', Format(RecServiceLine."Line No."));
                                             AddAttribute(XMLNodeMO, TypeXX + '_MO', '');
                                             AddAttribute(XMLNodeMO, 'CODEIMPUTATION_MO', RecServiceLine."Bill-to Customer No.");
-                                            if RecServiceLine."SBOX MO" <> '' then
-                                                AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."SBOX MO")
+                                            if RecServiceLine."SBX SBOX MO" <> '' then
+                                                AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLine."SBX SBOX MO")
                                             else begin
                                                 if RecServiceLabor.Get(RecServiceLine."No.") then
                                                     AddAttribute(XMLNodeMO, 'CODEOPERATION', RecServiceLabor."STF No.")
@@ -3192,23 +3192,23 @@ codeunit 75101 "Business Layer"
             Error('Le paramétrage SBOX est manquant.');
 
         case lClient of
-            SBOXSetup."Warranty Imputation Account":
-                exit(SBOXSetup."Warranty Imputation Code");
+            SBOXSetup."SBX Warranty Imputation Account":
+                exit(SBOXSetup."SBX Warranty Imputation Code");
 
-            SBOXSetup."Insurance Imputation Account":
-                exit(SBOXSetup."Insurance Imputation Code");
+            SBOXSetup."SBX Insurance Imputation Account":
+                exit(SBOXSetup."SBX Insurance Imputation Code");
 
-            SBOXSetup."Campaign Imputation Account":
-                exit(SBOXSetup."Campaign Imputation Code");
+            SBOXSetup."SBX Campaign Imputation Account":
+                exit(SBOXSetup."SBX Campaign Imputation Code");
 
-            SBOXSetup."Contract Imputation Account":
-                exit(SBOXSetup."Contract Imputation Code");
+            SBOXSetup."SBX Contract Imputation Account":
+                exit(SBOXSetup."SBX Contract Imputation Code");
 
-            SBOXSetup."Internal Imputation Account":
-                exit(SBOXSetup."Internal Imputation Code");
+            SBOXSetup."SBX Internal Imputation Account":
+                exit(SBOXSetup."SBX Internal Imputation Code");
 
             else
-                exit(SBOXSetup."Customer Imputation Code");
+                exit(SBOXSetup."SBX Customer Imputation Code");
         end;
     end;
 
@@ -3386,7 +3386,7 @@ codeunit 75101 "Business Layer"
         Location.Reset();
         Location.SetRange("DLT Exclude From Inventory", false);
         Location.SetRange("Use As Parts Location Code", true);
-        Location.SetRange("Display in Service BOX", true);
+        Location.SetRange("SBX Display in Service BOX", true);
         if Location.FindSet() then
             repeat
                 ItemPerLoc.Reset();
@@ -3455,7 +3455,7 @@ codeunit 75101 "Business Layer"
         Location.Reset();
         Location.SetRange("DLT Exclude From Inventory", false);
         Location.SetRange("Use As Parts Location Code", true);
-        Location.SetRange("Display in Service BOX", true);
+        Location.SetRange("SBX Display in Service BOX", true);
 
         if Location.FindSet() then
             repeat
@@ -3536,7 +3536,7 @@ codeunit 75101 "Business Layer"
             LocationParent.Reset();
             LocationParent.SetRange("DLT Exclude From Inventory", false);
             LocationParent.SetRange("Use As Parts Location Code", true);
-            LocationParent.SetRange("Display in Service BOX", true);
+            LocationParent.SetRange("SBX Display in Service BOX", true);
 
             if LocationParent.FindSet() then
                 repeat
@@ -3640,7 +3640,7 @@ codeunit 75101 "Business Layer"
         Location.Reset();
         Location.SetRange("DLT Exclude From Inventory", false);
         Location.SetRange("Use As Parts Location Code", true);
-        Location.SetRange("Display in Service BOX", true);
+        Location.SetRange("SBX Display in Service BOX", true);
 
         if Location.FindSet() then
             repeat
@@ -3701,7 +3701,7 @@ codeunit 75101 "Business Layer"
             LocationParent.Reset();
             LocationParent.SetRange("DLT Exclude From Inventory", false);
             LocationParent.SetRange("Use As Parts Location Code", true);
-            LocationParent.SetRange("Display in Service BOX", true);
+            LocationParent.SetRange("SBX Display in Service BOX", true);
 
             if LocationParent.FindSet() then
                 repeat
@@ -4405,27 +4405,27 @@ codeunit 75101 "Business Layer"
         if not SBOXSetup.Get() then exit;
 
         case lTypeImputation of
-            Format(SBOXSetup."Customer Imputation Code"):
+            Format(SBOXSetup."SBX Customer Imputation Code"):
                 begin
                     // Pour le client standard, on ne remplace que s'il n'y a rien
                     if lClient = '' then
-                        lClient := SBOXSetup."Customer Imputation Account";
+                        lClient := SBOXSetup."SBX Customer Imputation Account";
                 end;
 
-            Format(SBOXSetup."Warranty Imputation Code"):
-                lClient := SBOXSetup."Warranty Imputation Account";
+            Format(SBOXSetup."SBX Warranty Imputation Code"):
+                lClient := SBOXSetup."SBX Warranty Imputation Account";
 
-            Format(SBOXSetup."Insurance Imputation Code"):
-                lClient := SBOXSetup."Insurance Imputation Account";
+            Format(SBOXSetup."SBX Insurance Imputation Code"):
+                lClient := SBOXSetup."SBX Insurance Imputation Account";
 
-            Format(SBOXSetup."Campaign Imputation Code"):
-                lClient := SBOXSetup."Campaign Imputation Account";
+            Format(SBOXSetup."SBX Campaign Imputation Code"):
+                lClient := SBOXSetup."SBX Campaign Imputation Account";
 
-            Format(SBOXSetup."Contract Imputation Code"):
-                lClient := SBOXSetup."Contract Imputation Account";
+            Format(SBOXSetup."SBX Contract Imputation Code"):
+                lClient := SBOXSetup."SBX Contract Imputation Account";
 
-            Format(SBOXSetup."Internal Imputation Code"):
-                lClient := SBOXSetup."Internal Imputation Account";
+            Format(SBOXSetup."SBX Internal Imputation Code"):
+                lClient := SBOXSetup."SBX Internal Imputation Account";
             else
                 // Si le code du XML ne correspond à aucun paramétrage, on ne fait rien (exit)
                 // lClient gardera sa valeur initiale (le client du dossier).
@@ -4439,7 +4439,7 @@ codeunit 75101 "Business Layer"
         RecServiceJobLine: Record "Service Order Symptome  EDMS";
         RecServiceLine: Record "Service Line EDMS";
         RecServicePackageLine: Record "Service Package Version Line";
-        SBOXPackageLine: Record "SBOX Package Line";
+        SBOXPackageLine: Record "SBX Package Line";
         JobLineNo: Integer;
     begin
         // Récupérer ID ligne
@@ -4482,7 +4482,7 @@ codeunit 75101 "Business Layer"
                 SBOXPackageLine.SetRange("Document No.", RecServiceHeader."No.");
                 SBOXPackageLine.SetRange("Package No.", RecServiceJobLine."Package No.");
                 SBOXPackageLine.SetRange("Package Version No.", RecServiceJobLine."Package Version No.");
-                SBOXPackageLine.SetRange("Code Type Veh", RecServiceJobLine."SBOX CodeTypeVehicule");
+                SBOXPackageLine.SetRange("Code Type Veh", RecServiceJobLine."SBX SBOX CodeTypeVehicule");
 
                 if SBOXPackageLine.FindSet() then
                     SBOXPackageLine.DeleteAll();
@@ -4683,7 +4683,7 @@ codeunit 75101 "Business Layer"
         end else begin
 
             eDMSSetup.Get();
-            if eDMSSetup."Default MO" = '' then
+            if eDMSSetup."SBX Default MO" = '' then
                 exit;
 
             RecServiceLine.Init();
@@ -4693,12 +4693,12 @@ codeunit 75101 "Business Layer"
 
             // [C2] Idem : tout remplir AVANT Insert(true)
             RecServiceLine.Validate(Type, RecServiceLine.Type::Labor);
-            RecServiceLine.Validate("No.", eDMSSetup."Default MO");
+            RecServiceLine.Validate("No.", eDMSSetup."SBX Default MO");
             RecServiceLine.Validate(Quantity, qte);
             RecServiceLine.Validate("Unit Price",
                 ParseDecimal(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO')));
             RecServiceLine."DLT Instruction Line" := RecServiceJobLine."Task No.";
-            RecServiceLine."SBOX MO" := CodeOp;
+            RecServiceLine."SBX SBOX MO" := CodeOp;
             RecServiceLine."Package No." := RecServiceJobLine."Package No.";
             RecServiceLine."Package Version No." := RecServiceJobLine."Package Version No.";
 
@@ -4771,7 +4771,7 @@ codeunit 75101 "Business Layer"
         end else begin
             // Fallback : MO par défaut si pas trouvé pour cette marque
             eDMSSetup.Get();
-            if eDMSSetup."Default MO" <> '' then begin
+            if eDMSSetup."SBX Default MO" <> '' then begin
                 RecServiceLine.Init();
                 RecServiceLine.Validate("Document Type", RecServiceJobLine."Document Type");
                 RecServiceLine.Validate("Document No.", RecServiceJobLine."Document No.");
@@ -4779,7 +4779,7 @@ codeunit 75101 "Business Layer"
                 RecServiceLine.Insert(true);
 
                 RecServiceLine.Validate(Type, RecServiceLine.Type::Labor);
-                RecServiceLine.Validate("No.", eDMSSetup."Default MO");
+                RecServiceLine.Validate("No.", eDMSSetup."SBX Default MO");
 
                 RecServiceLine.Validate(Quantity, qte);
                 /* if Evaluate(Montant, ConvertStr(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO'), '.', ',')) then
@@ -4788,7 +4788,7 @@ codeunit 75101 "Business Layer"
                 RecServiceLine.Validate("Unit Price", ParseDecimal(GetAttributeValue(XMLNodeMO, 'PRIXHT_MO')));
 
                 RecServiceLine.Validate("DLT Instruction Line", RecServiceJobLine."Task No.");
-                RecServiceLine."SBOX MO" := CodeOp;
+                RecServiceLine."SBX SBOX MO" := CodeOp;
                 RecServiceLine.Modify(true);
             end;
         end;
@@ -5210,7 +5210,7 @@ codeunit 75101 "Business Layer"
         end;
 
         // ── Service PAD ────────────────────────────────────────────────────────
-        if eDMSSetup.ServicePAD and (eDMSSetup.interfaceVersion = '13') then
+        if eDMSSetup."sbx ServicePAD" and (eDMSSetup.interfaceVersion = '13') then
             if XMLNodeReq.SelectSingleNode('SERVICEPAD', XMLNodeServicePAD_Node) then begin
                 XMLNodeServicePAD := XMLNodeServicePAD_Node.AsXmlElement();
 
@@ -5272,11 +5272,11 @@ codeunit 75101 "Business Layer"
                         "Sell-to Customer No.",
                         eDMSSetup.PRPassingAccount);
 
-                RecSalesHeader.Validate("VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
-                RecSalesHeader."Dossier SBOX" := true;
+                RecSalesHeader.Validate("sbx VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
+                RecSalesHeader."sbx Dossier SBOX" := true;
                 RecSalesHeader.Insert(true);
 
-                if eDMSSetup."Discount allowed" and CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                if eDMSSetup."sbx Discount allowed" and CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
                     if lTYPEREMISE = 1 then
                         RecSalesHeader.Validate("Payment Discount %", lREMISEDOSSIER)
                     else
@@ -5313,7 +5313,7 @@ codeunit 75101 "Business Layer"
                                 CopyStr(LigneDT_ID, 1, 20));
                     end;
 
-                    if eDMSSetup."Discount allowed LDT" and
+                    if eDMSSetup."sbx Discount allowed LDT" and
                        CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
                         Evaluate(lREMISELDT,
                             ConvertStr(GetAttributeValue(
@@ -5330,7 +5330,7 @@ codeunit 75101 "Business Layer"
                     AddAttribute(TmpNode, 'LIGNE_DT_ID_DMS', LigneDT_ID);
                 end;
 
-                if eDMSSetup."Discount allowed LDT" then begin
+                if eDMSSetup."sbx Discount allowed LDT" then begin
                     if (lREMISELDTTOT + lPRIXLDTTTCTOT) > 0 then
                         RecSalesHeader.Validate(
                             "Payment Discount %",
@@ -5484,11 +5484,11 @@ codeunit 75101 "Business Layer"
                     else
                         RecServiceHeader.Validate(
                             "Sell-to Customer No.",
-                            eDMSSetup."Customer Imputation Account");
+                            eDMSSetup."sbx Customer Imputation Account");
                 end else
                     RecServiceHeader.Validate(
                         "Sell-to Customer No.",
-                        eDMSSetup."Customer Imputation Account");
+                        eDMSSetup."sbx Customer Imputation Account");
 
                 RecServiceHeader.Validate(VIN, GetAttributeValue(XMLNodeVehicle, 'VIN'));
                 Evaluate(RecServiceHeader."Variable Field Run 1",
@@ -5614,7 +5614,7 @@ codeunit 75101 "Business Layer"
         end;
 
         // ── Service PAD ────────────────────────────────────────────────────────
-        if eDMSSetup.ServicePAD and (eDMSSetup.interfaceVersion = '13') then
+        if eDMSSetup."SBX ServicePAD" and (eDMSSetup.interfaceVersion = '13') then
             if XMLNodeReq.SelectSingleNode('SERVICEPAD', XMLNodeServicePAD_Node) then begin
                 XMLNodeServicePAD := XMLNodeServicePAD_Node.AsXmlElement();
                 GetAttributeValue(XMLNodeServicePAD, 'NOTE');
@@ -5683,14 +5683,14 @@ codeunit 75101 "Business Layer"
                         "Sell-to Customer No.",
                         eDMSSetup.PRPassingAccount);
 
-                RecSalesHeader.Validate("VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
-                RecSalesHeader."Dossier SBOX" := true;
+                RecSalesHeader.Validate("sbx VIN SBOX", GetAttributeValue(XMLNodeVehicle, 'VIN'));
+                RecSalesHeader."sbx Dossier SBOX" := true;
                 RecSalesHeader.Insert(true);
 
                 // [FIX-6] "Inv. Discount %" → CalcInvDiscountAmount / "Invoice Discount Value"
                 //         NB : "Payment Discount %" = escompte de règlement, sémantique différente.
                 //         Utiliser CalcInvDiscountAmount ou le champ "Invoice Discount Value" selon la table.
-                if eDMSSetup."Discount allowed" and CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
+                if eDMSSetup."SBX Discount allowed" and CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
                     if lTYPEREMISE = 1 then
                         RecSalesHeader.Validate("Invoice Discount Value", lREMISEDOSSIER)
                     else
@@ -5727,7 +5727,7 @@ codeunit 75101 "Business Layer"
                                 CopyStr(LigneDT_ID, 1, 20));
                     end;
 
-                    if eDMSSetup."Discount allowed LDT" and
+                    if eDMSSetup."SBX Discount allowed LDT" and
                        CheckUserPermissionAPV('APV_MODIFY', RecUserSetup) then begin
                         Evaluate(lREMISELDT,
                             ConvertStr(GetAttributeValue(
@@ -5745,7 +5745,7 @@ codeunit 75101 "Business Layer"
                 end;
 
                 // [FIX-6] Même correction que ci-dessus pour le discount LDT
-                if eDMSSetup."Discount allowed LDT" then begin
+                if eDMSSetup."SBX Discount allowed LDT" then begin
                     if (lREMISELDTTOT + lPRIXLDTTTCTOT) > 0 then
                         RecSalesHeader.Validate(
                             "Invoice Discount Value",
@@ -5911,10 +5911,10 @@ codeunit 75101 "Business Layer"
                 // RecServiceHeader."Receptionist Code" := RecUserSetup."User ID";
 
                 // [FIX-1] Dossier SBOX
-                RecServiceHeader."Dossier SBOX" := true;
+                RecServiceHeader."SBX Dossier SBOX" := true;
 
                 // [FIX-1] Order Limit depuis Observations
-                Evaluate(RecServiceHeader."Order Limit",
+                Evaluate(RecServiceHeader."SBX Order Limit",
                     GetAttributeValue(XMLNodeCustomer, 'Observations'));
 
                 RecServiceHeader.Insert(true);
@@ -5928,11 +5928,11 @@ codeunit 75101 "Business Layer"
                     else
                         RecServiceHeader.Validate(
                             "Sell-to Customer No.",
-                            eDMSSetup."Customer Imputation Account");
+                            eDMSSetup."SBX Customer Imputation Account");
                 end else
                     RecServiceHeader.Validate(
                         "Sell-to Customer No.",
-                        eDMSSetup."Customer Imputation Account");
+                        eDMSSetup."SBX Customer Imputation Account");
 
                 RecServiceHeader.Validate(VIN, GetAttributeValue(XMLNodeVehicle, 'VIN'));
 
@@ -6069,8 +6069,8 @@ codeunit 75101 "Business Layer"
                     RecServiceJobLine.Validate("Package Version No.", version);
 
                     eDMSSetup.Get();
-                    if GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT') = Format(eDMSSetup."Insurance Imputation Code") then
-                        RecServiceJobLine.Validate(Assurance, true);
+                    if GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT') = Format(eDMSSetup."SBX Insurance Imputation Code") then
+                        RecServiceJobLine.Validate("SBX Assurance", true);
 
                     RecServiceJobLine.Insert(true);
                     CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
@@ -6101,13 +6101,13 @@ codeunit 75101 "Business Layer"
                 RecServiceJobLine."Package Type" := RecServiceJobLine."Package Type"::SBOX;
                 RecServiceJobLine."Package No." := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
                 RecServiceJobLine."Package Version No." := 10000;
-                RecServiceJobLine."SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
-                RecServiceJobLine."SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
-                RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+                RecServiceJobLine."sbx SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."SBX SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
+                RecServiceJobLine."SBX SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
 
                 // Gestion des prix forfait SBOX
-                if Evaluate(RecServiceJobLine."SBOX PrixHT Forfait", ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXHT_LDT'), '.', ',')) then;
-                if Evaluate(RecServiceJobLine."SBOX PrixTTC Forfait", ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXTTC_LDT'), '.', ',')) then;
+                if Evaluate(RecServiceJobLine."SBX SBOX PrixHT Forfait", ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXHT_LDT'), '.', ',')) then;
+                if Evaluate(RecServiceJobLine."SBX SBOX PrixTTC Forfait", ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXTTC_LDT'), '.', ',')) then;
 
                 RecServiceJobLine.Insert(true); // INSERTION ICI pour permettre aux lignes PR/MO de se lier
 
@@ -6147,7 +6147,7 @@ codeunit 75101 "Business Layer"
             RecServiceJobLine.Validate("Bill-to Customer No.", CODEIMPUTATION_LDT_value);
 
             Evaluate(RecServiceJobLine."Symptome Description", GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT'));
-            RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+            RecServiceJobLine."SBX SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
 
             RecServiceJobLine.Insert(true);
 
@@ -6244,8 +6244,8 @@ codeunit 75101 "Business Layer"
 
                     eDMSSetup.Get();
                     if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
-                       Format(eDMSSetup."Insurance Imputation Code") then
-                        RecServiceJobLine.Validate(Assurance, true);
+                       Format(eDMSSetup."SBX Insurance Imputation Code") then
+                        RecServiceJobLine.Validate("SBX Assurance", true);
 
                     RecServiceJobLine.Insert(true);
                     CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
@@ -6293,16 +6293,16 @@ codeunit 75101 "Business Layer"
                 RecServiceJobLine."Package No." := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
                 // [IFIX-1] Valeur 1000 conforme à l'original C/AL (InsertLDTLV avait 10000 — erreur)
                 RecServiceJobLine."Package Version No." := 1000;
-                RecServiceJobLine."SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
-                RecServiceJobLine."SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
-                RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
-                RecServiceJobLine."SBOX TYPE IMPUTATION" := GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT');
+                RecServiceJobLine."SBX SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."SBX SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
+                RecServiceJobLine."SBX SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+                RecServiceJobLine."SBX SBOX TYPE IMPUTATION" := GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT');
 
                 // [IFIX-2] ConvertStr('.', ',') — sens correct pour Evaluate en locale FR
                 //          InsertLDTLV avait inversé en (',', '.') ce qui est faux
-                if Evaluate(RecServiceJobLine."SBOX PrixHT Forfait",
+                if Evaluate(RecServiceJobLine."SBX SBOX PrixHT Forfait",
                     ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXHT_LDT'), '.', ',')) then;
-                if Evaluate(RecServiceJobLine."SBOX PrixTTC Forfait",
+                if Evaluate(RecServiceJobLine."SBX SBOX PrixTTC Forfait",
                     ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXTTC_LDT'), '.', ',')) then;
 
 
@@ -6313,8 +6313,8 @@ codeunit 75101 "Business Layer"
 
                 eDMSSetup.Get();
                 if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
-                   Format(eDMSSetup."Insurance Imputation Code") then
-                    RecServiceJobLine.Validate(Assurance, true);
+                   Format(eDMSSetup."SBX Insurance Imputation Code") then
+                    RecServiceJobLine.Validate("SBX Assurance", true);
 
                 RecServiceJobLine.Insert(true);
                 CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
@@ -6346,12 +6346,12 @@ codeunit 75101 "Business Layer"
             Evaluate(RecServiceJobLine."Symptome Description",
                 GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'));
 
-            RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+            RecServiceJobLine."SBX SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
 
             eDMSSetup.Get();
             if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
-               Format(eDMSSetup."Insurance Imputation Code") then
-                RecServiceJobLine.Validate(Assurance, true);
+               Format(eDMSSetup."SBX Insurance Imputation Code") then
+                RecServiceJobLine.Validate("SBX Assurance", true);
 
             RecServiceJobLine.Insert(true);
             CleanServCustSplitUp(RecServiceJobLine, CODEIMPUTATION_LDT_value);
@@ -6456,8 +6456,8 @@ codeunit 75101 "Business Layer"
 
                     eDMSSetup.Get();
                     if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
-                       Format(eDMSSetup."Insurance Imputation Code") then
-                        RecServiceJobLine.Validate(Assurance, true);
+                       Format(eDMSSetup."SBX Insurance Imputation Code") then
+                        RecServiceJobLine.Validate("SBX Assurance", true);
 
                     RecServiceJobLine.Insert(true);
 
@@ -6505,19 +6505,19 @@ codeunit 75101 "Business Layer"
 
                 RecServiceJobLine."Package No." := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
                 RecServiceJobLine."Package Version No." := 10000;
-                RecServiceJobLine."SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
-                RecServiceJobLine."SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
-                RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
-                RecServiceJobLine."SBOX TYPE IMPUTATION" := GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT');
+                RecServiceJobLine."SBX SBOX Forfait" := CopyStr(IDFORFAIT_Attribute_value, 1, 14);
+                RecServiceJobLine."SBX SBOX CodeTypeVehicule" := CopyStr(IDFORFAIT_Attribute_value, 15);
+                RecServiceJobLine."SBX SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+                RecServiceJobLine."SBX SBOX TYPE IMPUTATION" := GetAttributeValue(XMLNodeLDT, 'CODEIMPUTATION_LDT');
 
-                if Evaluate(RecServiceJobLine."SBOX PrixHT Forfait",
+                if Evaluate(RecServiceJobLine."SBX SBOX PrixHT Forfait",
      ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXHT_LDT'), ',', '.'), 9) then;
-                if Evaluate(RecServiceJobLine."SBOX PrixTTC Forfait",
+                if Evaluate(RecServiceJobLine."SBX SBOX PrixTTC Forfait",
                     ConvertStr(GetAttributeValue(XMLNodeLDT, 'PRIXTTC_LDT'), ',', '.'), 9) then;
                 eDMSSetup.Get();
                 if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
-                   Format(eDMSSetup."Insurance Imputation Code") then
-                    RecServiceJobLine.Validate(Assurance, true);
+                   Format(eDMSSetup."SBX Insurance Imputation Code") then
+                    RecServiceJobLine.Validate("SBX Assurance", true);
 
                 RecServiceJobLine.Insert(true);
 
@@ -6551,12 +6551,12 @@ codeunit 75101 "Business Layer"
             Evaluate(RecServiceJobLine."Symptome Description",
                 GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT'));
 
-            RecServiceJobLine."SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
+            RecServiceJobLine."SBX SBOX LDT" := GetAttributeValue(XMLNodeLDT, 'LIGNE_DT_ID');
 
             eDMSSetup.Get();
             if GetAttributeValue(XMLNodeLDT, TypeXX + '_LDT') =
-               Format(eDMSSetup."Insurance Imputation Code") then
-                RecServiceJobLine.Validate(Assurance, true);
+               Format(eDMSSetup."SBX Insurance Imputation Code") then
+                RecServiceJobLine.Validate("SBX Assurance", true);
 
             RecServiceJobLine.Insert(true);
 
@@ -6872,16 +6872,16 @@ codeunit 75101 "Business Layer"
                         AddAttribute(XMLNode, 'LIGNE_DT_ID', lRecServiceJobLine."Symptome Code");
                         AddAttribute(XMLNode, 'LIGNE_DT_ID_DMS', Format(lRecServiceJobLine."Task No."));
                         AddAttribute(XMLNode, 'IDFORFAIT',
-                            lRecServiceJobLine."Package No." + lRecServiceJobLine."SBOX CodeTypeVehicule");
+                            lRecServiceJobLine."Package No." + lRecServiceJobLine."SBX SBOX CodeTypeVehicule");
                         AddAttribute(XMLNode, 'ReferenceFF',
-                            lRecServiceJobLine."Package No." + lRecServiceJobLine."SBOX CodeTypeVehicule");
+                            lRecServiceJobLine."Package No." + lRecServiceJobLine."SBX SBOX CodeTypeVehicule");
                         AddAttribute(XMLNode, 'LibelleFF', lRecServiceJobLine.Commentaire);
 
                         // Prix directement depuis Service Job Line
                         AddAttribute(XMLNode, 'PrixUnitaireHT',
-                           FormatDecimalXML(lRecServiceJobLine."SBOX PrixHT Forfait"));//, 0, '<Precision,2:2><Standard Format,2>'));
+                           FormatDecimalXML(lRecServiceJobLine."SBX SBOX PrixHT Forfait"));//, 0, '<Precision,2:2><Standard Format,2>'));
                         AddAttribute(XMLNode, 'PrixUnitaireTTC',
-                            FormatDecimalXML(lRecServiceJobLine."SBOX PrixTTC Forfait"));//, 0, '<Precision,2:2><Standard Format,2>'));
+                            FormatDecimalXML(lRecServiceJobLine."SBX SBOX PrixTTC Forfait"));//, 0, '<Precision,2:2><Standard Format,2>'));
 
                         AddAttribute(XMLNode, 'TexteErreur', '');
 

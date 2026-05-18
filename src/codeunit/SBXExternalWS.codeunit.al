@@ -1,4 +1,4 @@
-codeunit 75100 "SBox External WS"
+codeunit 75100 "SBX External WS"
 {
     [ServiceEnabled]
     procedure SearchCustomers(
@@ -6,7 +6,7 @@ codeunit 75100 "SBox External WS"
         ChampsCmpl: Text
     ): Text
     var
-        BL: Codeunit "Business Layer";
+        BL: Codeunit "SBX Business Layer";
     begin
 
         exit(BL.LZRC01T01(CodeInterrogation, ChampsCmpl))
@@ -26,7 +26,7 @@ codeunit 75100 "SBox External WS"
 
 ) ResultXml: Text
     var
-        BL: Codeunit "Business Layer";
+        BL: Codeunit "SBX Business Layer";
     begin
         case RqType of
             '01':
@@ -161,7 +161,7 @@ codeunit 75100 "SBox External WS"
 
     procedure CheckStatus(var XMLText: Text)
     var
-        BL: Codeunit "Business Layer";
+        BL: Codeunit "SBX Business Layer";
         XMLDom: XmlDocument;
         XMLRoot: XmlElement;
     begin
@@ -455,7 +455,7 @@ codeunit 75100 "SBox External WS"
         CODE_INTERROGATION: Text[30];
         RqType: Text[30];
         CHAMPS_CMPL: Text[30];
-        BizLayer: Codeunit "Business Layer";
+        BizLayer: Codeunit "SBX Business Layer";
         CLIENT_DMS_ID: Text[30];
         VEHICULE_DMS_ID: Text[30];
         VIN: Text[30];

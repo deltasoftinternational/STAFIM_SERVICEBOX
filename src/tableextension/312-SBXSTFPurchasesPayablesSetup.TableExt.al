@@ -3,7 +3,7 @@
     fields
     {
 
-        field(75000; "STF Templ. Item"; Code[20])
+        field(75000; "SBX STF Templ. Item"; Code[20])
         {
             Caption = 'Modèle article';
             TableRelation = "Item Templ.";
