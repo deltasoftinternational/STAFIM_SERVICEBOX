@@ -1,4 +1,4 @@
-pageextension 75103 "SBX Servicebox Setup EXT" extends "STF Servicebox Setup" //75006
+pageextension 75502 "SBX Servicebox Setup EXT" extends "STF Servicebox Setup" //75006
 {
     layout
     {

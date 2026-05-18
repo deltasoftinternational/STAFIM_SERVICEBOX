@@ -1,4 +1,4 @@
-pageextension 75100 "SBX Warehouse Employees" extends "Warehouse Employees" //7328
+pageextension 75501 "SBX Warehouse Employees" extends "Warehouse Employees" //7328
 {
     layout
     {

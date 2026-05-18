@@ -1,4 +1,4 @@
-pageextension 75102 "SBX STF Location" extends "Location Card" //5703
+pageextension 75500 "SBX STF Location" extends "Location Card" //5703
 {
 
     layout

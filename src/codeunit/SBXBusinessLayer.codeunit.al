@@ -1,4 +1,4 @@
-codeunit 75101 "SBX Business Layer"
+codeunit 75500  "SBX Business Layer"
 {
 
     local procedure MapTypeClient(TypeCust: Integer): Integer
@@ -153,7 +153,7 @@ codeunit 75101 "SBX Business Layer"
                     break;
             until Cust.Next() = 0;
 
-        // 🔹 Gestion Code / TexteDMS
+        // 🔹 G"SBX "SBX est""ion Code / TexteDMS
         if Cust.Count = 1 then begin
             CodeResult := '0';
             TexteDMS := '';

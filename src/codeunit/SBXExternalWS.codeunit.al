@@ -1,4 +1,4 @@
-codeunit 75100 "SBX External WS"
+codeunit 75501 "SBX External WS"
 {
     [ServiceEnabled]
     procedure SearchCustomers(
